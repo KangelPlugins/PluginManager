@@ -226,24 +226,46 @@ class KangelPluginsManagerPlugin(BasePlugin):
             log("[KPM] Pill disabled in settings")
             self._pill_registered = False
             return
+        if not self._pill_supported():
+            log("[KPM] Pill unsupported on this client version")
+            self._pill_registered = False
+            return
+        if not self.PillRegistry or not self.PillInfo or not self.PillCreator or not self.PillStackConfig or not self.WeatherPill:
+            log("[KPM] Pill classes unavailable")
+            self._pill_registered = False
+            return
+        if self._pill_registered:
+            self._ensure_kpm_pill_visible()
+            self._update_all_pills()
+            return
 
         plugin = self
 
-        try:
-            weather_pill_id = 0
-            if hasattr(plugin.PillStackConfig, "PillType") and hasattr(plugin.PillStackConfig.PillType, "WEATHER"):
-                weather_pill_id = plugin.PillStackConfig.PillType.WEATHER.id
-            
-            weather_info = self.PillRegistry.getPillInfo(jint(weather_pill_id))
-            weather_creator = weather_info.creator() if weather_info else None
+        class KPMPillCreator(dynamic_proxy(plugin.PillCreator)):
+            def __init__(self):
+                super().__init__()
 
+            def create(self, context, resourcesProvider):
+                try:
+                    pill = plugin.WeatherPill(context, resourcesProvider)
+                    pill.setTag(KPM_PILL_TAG)
+                    plugin._active_pills.add(pill)
+                    plugin._apply_kpm_pill_ui(pill)
+                    log("[KPM] KPMPillCreator.create: pill instance created")
+                    return pill
+                except Exception as e:
+                    log(f"[KPM] KPMPillCreator.create failed: {e}")
+                    log(traceback.format_exc())
+                    return None
+
+        try:
             info = self.PillInfo(
                 jint(KPM_PILL_ID),
                 _tr("pill_title"),
                 jint(R_tg.drawable.msg_addbot),
                 jint(-11565578),
                 jint(-13276952),
-                weather_creator
+                KPMPillCreator()
             )
             self.PillRegistry.register(info)
             self._install_kpm_pill_hooks()
