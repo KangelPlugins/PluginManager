@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "KangelPluginsManager"
+version = "1.3.6.2"
+description = "Kangel Plugins Manager — plugin store with easy management for exteraGram/AyuGram"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+  { name = "ArThirtyFour" }
+]
+keywords = ["telegram", "plugin", "exteraGram", "AyuGram", "plugins-manager"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "requests>=2.31.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/KangelPlugins/Plugins-Store"
+"Bug Tracker" = "https://github.com/KangelPlugins/Plugins-Store/issues"
+
+[tool.setuptools.package-data]
+kangelpluginsmanager = ["assests/*.json"]
+
+[tool.setuptools.packages.find]
+include = ["kangelpluginsmanager*"]
+exclude = ["dist*", "scripts*", "__pycache__*", "tests*"]
