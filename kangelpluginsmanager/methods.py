@@ -167,7 +167,12 @@ def log(*args, **kwargs):
 
 def _get_lang():
     lang = Locale.getDefault().getLanguage().lower()
-    return "ru" if lang.startswith("ru") else "en"
+    if lang.startswith("ru"):
+        return "ru"
+    elif lang.startswith("uk") or lang.startswith("ua"):
+        return "uk"
+    else:
+        return "en"
 
 _KPM_LOCALE = {}
 _KPM_LOCALE_LOADED = False

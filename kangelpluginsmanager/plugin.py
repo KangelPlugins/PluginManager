@@ -38,7 +38,7 @@ from org.telegram.messenger import (AndroidUtilities, ApplicationLoader,
 from org.telegram.messenger import R as R_tg
 from org.telegram.messenger import Utilities
 from org.telegram.tgnet import TLRPC
-from org.telegram.ui.ActionBar import AlertDialog, BottomSheet, SimpleTextView, Theme
+from org.telegram.ui.ActionBar import ActionBar, AlertDialog, BottomSheet, SimpleTextView, Theme
 from org.telegram.ui.Components import BackupImageView, LayoutHelper, UItem, UniversalRecyclerView
 from ui.alert import AlertDialogBuilder
 from ui.bulletin import BulletinHelper
@@ -61,6 +61,12 @@ from .methods import (
     _normalize_min_version,
     _format_badge_compact,
 )
+from .sbroka import (
+    build_collection_payload,
+    export_collection,
+    import_collection,
+    normalize_collection_plugins,
+)
 
 __id__ = "kangel_plugins_manager"
 __name__ = "Kangel Plugins Manager"
@@ -74,7 +80,7 @@ Requirements:exteraGram/AyuGram 12.5.1 or higher
 __author__ = "@ArThirtyFour | @KangelPlugins"
 __min_version__ = "12.5.1"
 __icon__ = "Kangelcons_by_fStikBot/5"
-__version__ = "1.4"
+__version__ = "1.4.1"
 
 PLUGINS_DIR = get_plugins_dir()
 KPM_PILL_ID = 34012501
@@ -82,35 +88,7 @@ KPM_PILL_TAG = "kpm_pill"
 
 
 class KangelPluginsManagerPlugin(BasePlugin):
-    def __init__(self):
-        super().__init__()
-        global _kpm_instance
-        _kpm_instance = self
-        self.store_json_urls = [
-            "https://raw.githubusercontent.com/KangelPlugins/Plugins-Store/refs/heads/main/store.json",
-            "https://raw.githubusercontent.com/KangelPlugins/Plugins-Store/main/store.json",
-        ]
-        self.github_api_url = "https://api.github.com/repos/KangelPlugins/Plugins-Store/commits/main"
-        self.cache_file = os.path.join(PLUGINS_DIR, ".kpm_cache.json")
-        self.plugins_list = {}
-        self.plugin_names_cache = {}
-        self._install_dialog_views_cache = {}
-        self._sticker_cache = {} 
-        self._trigram_index = {}
-        self._search_text_cache = {}
-        self._active_pills = weakref.WeakSet()
-        self._pill_registered = False
-        self._pill_hooks_installed = False
-        self._pill_tag_key = jint(0x4B504D)
-        self.PillRegistry = find_class("com.exteragram.messenger.pillstack.core.PillRegistry")
-        self.PillInfo = find_class("com.exteragram.messenger.pillstack.core.PillRegistry$PillInfo")
-        self.PillCreator = find_class("com.exteragram.messenger.pillstack.core.PillRegistry$PillCreator")
-        self.PillStackConfig = find_class("com.exteragram.messenger.pillstack.core.PillStackConfig")
-        self.WeatherPill = find_class("com.exteragram.messenger.pillstack.ui.pills.weather.WeatherPill")
-        self.auto_update = True
-        self.plugins_dir = PLUGINS_DIR
-        self.cache_file = os.path.join(self.plugins_dir, ".kpm_cache.json")
-        self.load_cache()
+    pass
 
     def has_settings(self):
         return True
@@ -456,7 +434,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             ]
     
     def _create_plugin_management_settings(self):
-        return [
+        items = [
             Header(text=_tr("actions_header")),
             Text(
                 text=_tr("refresh_list"),
@@ -477,8 +455,342 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 text=_tr("clear_cache"),
                 icon="msg_clear",
                 on_click=lambda _: run_on_queue(lambda: self.clear_cache())
+            ),
+            Divider(),
+            Header(text=_tr("plugin_collections")),
+            Text(
+                text=_tr("export_collection"),
+                icon="msg_share",
+                on_click=lambda _: open_link("https://github.com/KangelPlugins/SborkaDocs/blob/main/README.md")
+            ),
+            Text(
+                text=_tr("import_collection"),
+                icon="msg_download",
+                on_click=lambda _: self._show_import_collection_dialog()
             )
         ]
+        return items
+
+    def _get_store_picker_plugin_ids(self):
+        if not self.plugins_list:
+            self.load_cache()
+        if not self.plugins_list:
+            self.refresh_store(force=True, has_bulletin=False, md3_anim=False)
+        return sorted(list(self.plugins_list.keys()), key=lambda pid: self.get_plugin_display_name(pid).lower())
+
+    def _make_collection_preview_text(self, metadata, plugin_ids):
+        plugin_ids = normalize_collection_plugins(plugin_ids)
+        lines = []
+        name = str((metadata or {}).get("name") or "").strip()
+        author = str((metadata or {}).get("author") or "").strip()
+        description = str((metadata or {}).get("description") or "").strip()
+        
+        if name:
+            lines.append(name)
+        if author:
+            lines.append(f"{_tr('collection_author')}: {author}")
+        if description:
+            lines.append(description)
+            
+        count_label = _tr("collection_plugins_count").format(len(plugin_ids))
+        lines.append(count_label)
+        if plugin_ids:
+            preview = []
+            for pid in plugin_ids[:6]:
+                info = self.plugins_list.get(pid) or {}
+                preview.append(f"• {info.get('name', pid)}")
+            if len(plugin_ids) > 6:
+                preview.append(_tr("collection_plugins_more").format(len(plugin_ids) - 6))
+            lines.append("\n".join(preview))
+        else:
+            lines.append(_tr("collection_plugins_empty"))
+        return "\n\n".join([line for line in lines if line])
+
+    def _show_collection_picker(self, title, selected_plugin_ids, on_done):
+        log(f"[KPM] _show_collection_picker called with title: {title}, selected_plugin_ids: {selected_plugin_ids}")
+        fragment = get_last_fragment()
+        if not fragment:
+            log("[KPM] _show_collection_picker: fragment is None, returning")
+            return
+
+        all_ids = self._get_store_picker_plugin_ids()
+        log(f"[KPM] _show_collection_picker: all_ids: {all_ids}")
+        if not all_ids:
+            BulletinHelper.show_error(_tr("store_load_failed"))
+            return
+
+        initial_selected = set(normalize_collection_plugins(selected_plugin_ids))
+        
+        delegate = self.CollectionPickerFragment(self, title, all_ids, initial_selected, on_done)
+        picker_fragment = UniversalFragment(delegate)
+        fragment.presentFragment(picker_fragment)
+
+    def _show_collection_designer(self, mode, metadata=None, selected_plugin_ids=None):
+        fragment = get_last_fragment()
+        if not fragment:
+            return
+        metadata = dict(metadata or {})
+        selected_plugin_ids = normalize_collection_plugins(selected_plugin_ids or [])
+        context = fragment.getParentActivity()
+        if not context:
+            return
+
+        from org.telegram.ui.Components import EditTextBoldCursor
+
+        builder = AlertDialogBuilder(context)
+        
+        container = LinearLayout(context)
+        container.setOrientation(LinearLayout.VERTICAL)
+        container.setPadding(AndroidUtilities.dp(18), AndroidUtilities.dp(10), AndroidUtilities.dp(18), AndroidUtilities.dp(6))
+        if mode == "import":
+            builder.set_title(_tr("import_collection"))
+            
+            preview_card = LinearLayout(context)
+            preview_card.setOrientation(LinearLayout.VERTICAL)
+            preview_card.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(16), AndroidUtilities.dp(16), AndroidUtilities.dp(16))
+            try:
+                preview_card.setBackground(Theme.createRoundRectDrawable(AndroidUtilities.dp(24), Theme.getColor(Theme.key_dialogSearchBackground)))
+            except Exception:
+                pass
+            header_row = LinearLayout(context)
+            header_row.setOrientation(LinearLayout.HORIZONTAL)
+            header_row.setGravity(Gravity.CENTER_VERTICAL)
+            icon_view = BackupImageView(context)
+            icon_view.setRoundRadius(0)
+            icon_view.getImageReceiver().setCrossfadeWithOldImage(True)
+            icon_str = metadata.get("icon", "")
+            if "/" in icon_str:
+                parts = icon_str.split("/", 1)
+                if len(parts) == 2:
+                    pack_name, index_str = parts
+                    try:
+                        sticker_index = int(index_str)
+                        self._load_sticker_async(icon_view, pack_name, sticker_index, f"col_icon_{pack_name}_{sticker_index}")
+                    except ValueError:
+                        pass
+            header_row.addView(icon_view, LayoutHelper.createLinear(40, 40, 0, 0, 12, 0))
+
+            coll_name = metadata.get("name", "Unnamed Collection")
+            title_text = AndroidTextView(context)
+            title_text.setText(coll_name)
+            title_text.setTypeface(AndroidUtilities.bold())
+            title_text.setTextSize(18)
+            title_text.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
+            header_row.addView(title_text, LayoutHelper.createLinear(-1, -2))
+
+            preview_card.addView(header_row, LayoutHelper.createLinear(-1, -2))
+
+            coll_desc = metadata.get("description", "")
+            if coll_desc:
+                desc_text = AndroidTextView(context)
+                desc_text.setText(coll_desc)
+                desc_text.setTextSize(14)
+                desc_text.setTextColor(Theme.getColor(Theme.key_dialogTextGray2))
+                desc_text.setPadding(0, AndroidUtilities.dp(8), 0, 0)
+                preview_card.addView(desc_text, LayoutHelper.createLinear(-1, -2))
+
+            plugins_scroll = NestedScrollView(context)
+            plugins_scroll.setPadding(0, AndroidUtilities.dp(8), 0, 0)
+            
+            plugins_layout = LinearLayout(context)
+            plugins_layout.setOrientation(LinearLayout.VERTICAL)
+
+            store_data = {}
+            try:
+                store_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "Plugins-Store", "store.json")
+                if os.path.exists(store_path):
+                    with open(store_path, "r", encoding="utf-8") as f:
+                        store_data = json.load(f)
+            except Exception:
+                pass
+
+            for plugin_id in selected_plugin_ids:
+                plugin_name = store_data.get(plugin_id, {}).get("name", plugin_id) if isinstance(store_data.get(plugin_id), dict) else plugin_id
+                
+                plugin_row = LinearLayout(context)
+                plugin_row.setOrientation(LinearLayout.HORIZONTAL)
+                plugin_row.setGravity(Gravity.CENTER_VERTICAL)
+                plugin_row.setPadding(0, AndroidUtilities.dp(4), 0, AndroidUtilities.dp(4))
+                
+                dot = AndroidTextView(context)
+                dot.setText("•")
+                dot.setTextSize(14)
+                dot.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGreenText))
+                dot.setPadding(0, 0, AndroidUtilities.dp(8), 0)
+                plugin_row.addView(dot)
+                
+                name_text = AndroidTextView(context)
+                name_text.setText(plugin_name)
+                name_text.setTextSize(14)
+                name_text.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
+                plugin_row.addView(name_text, LayoutHelper.createLinear(-1, -2))
+                
+                plugins_layout.addView(plugin_row)
+            
+            plugins_scroll.addView(plugins_layout)
+            container.addView(plugins_scroll)
+
+            coll_author = metadata.get("author", "")
+            if coll_author:
+                author_text = AndroidTextView(context)
+                author_text.setText(f"by {coll_author}")
+                author_text.setTextSize(13)
+                author_text.setTextColor(Theme.getColor(Theme.key_dialogTextGray))
+                author_text.setPadding(0, AndroidUtilities.dp(4), 0, 0)
+                preview_card.addView(author_text, LayoutHelper.createLinear(-1, -2))
+
+            container.addView(preview_card)
+            builder.set_view(container)
+
+            def on_install(d, w):
+                d.dismiss()
+                self._import_collection_plugins(metadata, selected_plugin_ids)
+            
+            builder.set_positive_button(_tr("install_button"), on_install)
+            builder.set_negative_button(_tr("cancel"), lambda d, w: d.dismiss())
+            builder.show()
+            return
+
+        builder.set_title(_tr("export_collection"))
+
+        def make_field(hint_key, value=""):
+            field = EditTextBoldCursor(context)
+            field.setHint(_tr(hint_key))
+            field.setText(str(value or ""))
+            try:
+                field.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
+                field.setHintTextColor(Theme.getColor(Theme.key_dialogTextGray))
+                field.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16)
+                field.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(12), AndroidUtilities.dp(14), AndroidUtilities.dp(12))
+                field.setBackground(Theme.createRoundRectDrawable(AndroidUtilities.dp(18), Theme.getColor(Theme.key_dialogSearchBackground)))
+            except Exception:
+                pass
+            lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.bottomMargin = AndroidUtilities.dp(10)
+            container.addView(field, lp)
+            return field
+
+        name_edit = make_field("collection_name", metadata.get("name", ""))
+        author_edit = make_field("collection_author", metadata.get("author", ""))
+        desc_edit = make_field("collection_description", metadata.get("description", ""))
+        icon_edit = make_field("collection_icon", metadata.get("icon", ""))
+
+        preview_card = LinearLayout(context)
+        preview_card.setOrientation(LinearLayout.VERTICAL)
+        preview_card.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(16), AndroidUtilities.dp(16), AndroidUtilities.dp(16))
+        try:
+            preview_card.setBackground(Theme.createRoundRectDrawable(AndroidUtilities.dp(24), Theme.getColor(Theme.key_dialogSearchBackground)))
+        except Exception:
+            pass
+
+        header_row = LinearLayout(context)
+        header_row.setOrientation(LinearLayout.HORIZONTAL)
+        header_row.setGravity(Gravity.CENTER_VERTICAL)
+
+        icon_view = BackupImageView(context)
+        icon_view.setRoundRadius(0)
+        icon_view.getImageReceiver().setCrossfadeWithOldImage(True)
+        icon_view.setVisibility(View.GONE)
+        header_row.addView(icon_view, LayoutHelper.createLinear(40, 40, 0, 0, 12, 0))
+
+        preview_title = AndroidTextView(context)
+        preview_title.setText(_tr("collection_preview"))
+        preview_title.setTypeface(AndroidUtilities.bold())
+        preview_title.setTextSize(16)
+        preview_title.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
+        header_row.addView(preview_title, LayoutHelper.createLinear(-2, -2))
+
+        preview_card.addView(header_row, LayoutHelper.createLinear(-1, -2))
+
+        preview_text = AndroidTextView(context)
+        preview_text.setTextSize(14)
+        preview_text.setTextColor(Theme.getColor(Theme.key_dialogTextGray2))
+        preview_text.setPadding(0, AndroidUtilities.dp(8), 0, 0)
+        preview_card.addView(preview_text, LayoutHelper.createLinear(-1, -2))
+        container.addView(preview_card)
+
+        def current_metadata():
+            return {
+                "name": name_edit.getText().toString(),
+                "author": author_edit.getText().toString(),
+                "description": desc_edit.getText().toString(),
+                "icon": icon_edit.getText().toString(),
+            }
+
+        def update_preview():
+            md = current_metadata()
+            preview_text.setText(self._make_collection_preview_text(md, selected_plugin_ids))
+            icon_str = md.get("icon", "")
+            if "/" in icon_str:
+                parts = icon_str.split("/", 1)
+                if len(parts) == 2:
+                    pack_name, index_str = parts
+                    try:
+                        sticker_index = int(index_str)
+                        icon_view.setVisibility(View.VISIBLE)
+                        self._load_sticker_async(icon_view, pack_name, sticker_index, f"col_prev_{pack_name}_{sticker_index}")
+                    except ValueError:
+                        icon_view.setVisibility(View.GONE)
+                else:
+                    icon_view.setVisibility(View.GONE)
+            else:
+                icon_view.setVisibility(View.GONE)
+
+        class PreviewWatcher(dynamic_proxy(TextWatcher)):
+            def beforeTextChanged(self, s, start, count, after):
+                pass
+            def onTextChanged(self, s, start, before, count):
+                pass
+            def afterTextChanged(self, editable):
+                update_preview()
+
+        watcher = PreviewWatcher()
+        name_edit.addTextChangedListener(watcher)
+        author_edit.addTextChangedListener(watcher)
+        desc_edit.addTextChangedListener(watcher)
+        icon_edit.addTextChangedListener(watcher)
+        update_preview()
+
+        builder.set_view(container)
+        builder.set_neutral_button(_tr("collection_pick_plugins"), lambda d, w: (d.dismiss(), self._show_collection_picker(_tr("collection_pick_plugins"), selected_plugin_ids, lambda ids: self._show_collection_designer(mode, current_metadata(), ids))))
+
+        def on_submit(d, w):
+            payload_metadata = current_metadata()
+            self._import_collection_plugins(payload_metadata, selected_plugin_ids)
+            d.dismiss()
+
+        builder.set_positive_button(_tr("export_collection"), on_submit)
+        builder.set_negative_button(_tr("cancel"), lambda d, w: d.dismiss())
+        builder.show()
+
+    def _show_import_collection_designer(self, metadata, plugin_ids):
+        self._show_collection_designer("import", metadata, plugin_ids)
+
+    def _import_collection_plugins(self, metadata, plugin_ids):
+        plugin_ids = normalize_collection_plugins(plugin_ids)
+        if not plugin_ids:
+            BulletinHelper.show_error(_tr("collection_plugins_empty"))
+            return
+
+        run_on_ui_thread(lambda: BulletinHelper.show_info(f"Installing {len(plugin_ids)} plugins..."))
+
+        def do_install_all():
+            success_count = 0
+            failed_count = 0
+            for plugin_id in plugin_ids:
+                try:
+                    self.install_plugin_by_id(plugin_id, enable_after=True)
+                    success_count += 1
+                except Exception as e:
+                    log(f"[KPM] Import install failed for {plugin_id}: {e}")
+                    failed_count += 1
+            
+            if failed_count == 0:
+                run_on_ui_thread(lambda: BulletinHelper.show_success(f"Successfully installed {success_count} plugins."))
+            else:
+                run_on_ui_thread(lambda: BulletinHelper.show_error(f"Installed {success_count} plugins, {failed_count} failed."))
+
+        run_on_queue(do_install_all)
     
     
     def _create_auto_updates_settings(self):
@@ -719,13 +1031,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             title.setSingleLine(True)
             title.setGravity(Gravity.START)
             text_container.addView(title, LayoutHelper.createLinear(-1, -2, 0, 0, 4, 0))
-            
-            lang = _get_lang()
-            if lang == "ru":
-                subtitle_text = f"Плагин менеждер который просто работает"
-            else:
-                subtitle_text = f"Plugin Manager that just works"
-            
+            subtitle_text = _tr("settings_subtitle")         
             subtitle = TextView(context)
             subtitle.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText))
             subtitle.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14)
@@ -742,13 +1048,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
             return None
     
     def _get_plugin_info_text(self):
-
         plugin_count = len(self.plugins_list) if self.plugins_list else 0
-        lang = _get_lang()
-        if lang == "ru":
-            return f"KPM v{__version__} • {plugin_count} плагинов"
-        else:
-            return f"KPM v{__version__} • {plugin_count} plugins"
+        return _tr("plugin_info_text").format(__version__, plugin_count)
 
     def _show_md3_loading(self, duration_ms=3000):
         try:
@@ -923,14 +1224,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
 
             info_text = TextView(context)
             info_text.setGravity(Gravity.CENTER)
-            if lang == "ru":
-                info_lines = [
-                    "ДА НУ ОБНОВЛЕНИЕ ВЫШЛО , ЧЕ ТАМ НАДА РЫГАТЬ УЭЭЭЭ \n\n"
-                ]
-            else:
-                    info_lines = [
-                    "Update is here.. and FUCK WHY ARE YOU P-CHAN!?"
-                ]
+            info_lines = [_tr("easter_egg_info")]
             info_text.setText("\n".join(info_lines))
             info_text.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
             info_text.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
@@ -948,6 +1242,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
         self.add_drawer_menu_items()
         self.add_install_sheet_hook()
         self.add_plugins_activity_hook()
+        self._setup_kpm_file_hook()
         self._setup_settings_header_hook()
         if self._pill_supported():
             self._register_kpm_pill()
@@ -1223,6 +1518,186 @@ class KangelPluginsManagerPlugin(BasePlugin):
         except Exception as e:
             log(f"[KPM] Error adding deeplink hook: {e}")
             log(traceback.format_exc())
+
+    def _setup_kpm_file_hook(self):
+        try:
+            from java.lang import Class
+            from java import jclass
+            AndroidUtilitiesClass = Class.forName("org.telegram.messenger.AndroidUtilities")
+            MessageObjectClass = Class.forName("org.telegram.messenger.MessageObject")
+            ActivityClass = Class.forName("android.app.Activity")
+            ResourcesProviderClass = Class.forName("org.telegram.ui.ActionBar.Theme$ResourcesProvider")
+            open_for_view = AndroidUtilitiesClass.getDeclaredMethod(
+                "openForView",
+                MessageObjectClass,
+                ActivityClass,
+                ResourcesProviderClass,
+                jclass("java.lang.Boolean").TYPE,
+            )
+            open_for_view.setAccessible(True)
+            
+            class OpenForViewHook:
+                def __init__(hook_self):
+                    hook_self._plugin_ref = weakref.ref(self)
+                def before_hooked_method(hook_self, param):
+                    try:
+                        plugin = hook_self._plugin_ref()
+                        if not plugin:
+                            return
+                        if len(param.args) >= 1:
+                            msg = param.args[0]
+                            if msg and hasattr(msg, "getDocumentName"):
+                                name = msg.getDocumentName()
+                                if name:
+                                    name_lower = str(name).lower()
+                                    if name_lower.endswith(".kpm"):
+                                        plugin.log(f"Detected .kpm file click: {name}")
+                                        plugin._handle_kpm_file_open(msg)
+                                        param.setResult(False)
+                    except Exception as e:
+                        plugin.log(f"[KPM] File hook error: {e}")
+            
+            self.hook_method(open_for_view, OpenForViewHook())
+            log("[KPM] KPM file hook installed")
+        except Exception as e:
+            log(f"[KPM] Error setting up KPM file hook: {e}")
+    
+    def _handle_kpm_file_open(self, message_object):
+        try:
+            from com.exteragram.messenger.plugins import PluginsController
+            from org.telegram.messenger import MessagesController
+            kpm_plugin_id = "kangel_plugins_manager"
+            controller = PluginsController.getInstance()
+            kpm_installed = False
+            
+            if controller and controller.plugins:
+                if controller.plugins.containsKey(kpm_plugin_id):
+                    kpm_installed = True
+            
+            if not kpm_installed:
+                log(f"[KPM] KPM not installed, prompting user to install first...")
+                self._show_kpm_required_dialog(message_object)
+                return
+
+            def process_file():
+                try:
+                    document = message_object.getDocument()
+                    if not document:
+                        log("[KPM] No document in message")
+                        BulletinHelper.show_error("Cannot read file")
+                        return
+
+                    file_path = None
+
+                    try:
+                        from com.exteragram.messenger.utils.chats import ChatUtils
+                        file_path = ChatUtils.getInstance().getPathToMessage(message_object)
+                    except Exception as e:
+                        log(f"[KPM] ChatUtils error: {e}")
+                    
+                    if not file_path:
+                        file_path = self._get_message_file_path(message_object)
+                    
+                    log(f"[KPM] File path: {file_path}")
+                    
+                    if not file_path:
+                        log("[KPM] Could not get file path from message")
+                        BulletinHelper.show_error("Please wait for file to download")
+                        return
+                    
+                    if not os.path.exists(file_path):
+                        log(f"[KPM] File does not exist: {file_path}")
+                        BulletinHelper.show_error(f"File not found: {file_path}")
+                        return
+
+                    from .sbroka import load_collection_file
+                    from android_utils import run_on_ui_thread
+                    try:
+                        metadata, plugin_ids, collection = load_collection_file(file_path)
+                        run_on_ui_thread(lambda: self._show_import_collection_designer(metadata, plugin_ids))
+                    except Exception as e:
+                        log(f"[KPM] Error loading collection: {e}")
+                        BulletinHelper.show_error(f"Error: {e}")
+                except Exception as e:
+                    log(f"[KPM] Error processing KPM file: {e}")
+                    BulletinHelper.show_error(f"Error: {e}")
+            
+            run_on_queue(process_file)
+        except Exception as e:
+            log(f"[KPM] Error handling KPM file open: {e}")
+            BulletinHelper.show_error(f"Error: {e}")
+    
+    def _get_message_file_path(self, message_object):
+        try:
+            try:
+                ChatUtils = jclass("com.exteragram.messenger.utils.chats.ChatUtils")
+                path = ChatUtils.getInstance().getPathToMessage(message_object)
+                if path:
+                    return str(path)
+            except:
+                pass
+            try:
+                if hasattr(message_object, "messageOwner") and message_object.messageOwner:
+                    doc = message_object.messageOwner.media and message_object.messageOwner.media.document
+                    if doc and hasattr(doc, "localPath") and doc.localPath:
+                        return str(doc.localPath)
+            except:
+                pass
+
+            try:
+                doc = message_object.getDocument()
+                if doc and hasattr(doc, "getPathName"):
+                    path = doc.getPathName()
+                    if path:
+                        return str(path)
+            except:
+                pass
+            
+
+            try:
+                doc = message_object.getDocument()
+                if doc and hasattr(doc, "getLocalPath"):
+                    path = doc.getLocalPath()
+                    if path:
+                        return str(path)
+            except:
+                pass
+            
+            return None
+        except:
+            return None
+    
+    def _show_kpm_required_dialog(self, message_object):
+        try:
+            fragment = get_last_fragment()
+            if not fragment:
+                return
+            
+            from org.telegram.ui.ActionBar import AlertDialog
+            from ui.alert import AlertDialogBuilder
+            
+            context = fragment.getParentActivity()
+            if not context:
+                return
+            
+            builder = AlertDialogBuilder(context)
+            builder.set_title("KPM Required")
+            builder.set_message("This file requires Kangel Plugins Manager to be installed first.\n\nWould you like to install it now?")
+            builder.set_positive_button("Install KPM", lambda d, w: (
+                d.dismiss(),
+                self._install_kpm_from_file(message_object)
+            ))
+            builder.set_negative_button("Cancel", lambda d, w: d.dismiss())
+            builder.show()
+        except Exception as e:
+            log(f"[KPM] Error showing KPM required dialog: {e}")
+    
+    def _install_kpm_from_file(self, message_object):
+        try:
+            self._handle_deep_link_install("kangel_plugins_manager")
+        except Exception as e:
+            log(f"[KPM] Error installing KPM: {e}")
+            BulletinHelper.show_error("Failed to install KPM")
     
     def add_install_sheet_hook(self):
         try:
@@ -1242,6 +1717,29 @@ class KangelPluginsManagerPlugin(BasePlugin):
                         file_path = path_field.get(install_params)
                         if file_path and self.plugin._block_install_dialog_if_unsupported(str(file_path)):
                             param.setResult(None)
+                        try:
+                            file_path_str = str(file_path) if file_path else ""
+                            filename = os.path.basename(file_path_str)
+                            plugin_id_raw = filename.replace('.plugin', '').replace('.py', '').strip()
+                            if plugin_id_raw.startswith('.temp_'):
+                                plugin_id_raw = plugin_id_raw.replace('.temp_', '')
+                            try:
+                                with open(file_path_str, 'r', encoding='utf-8') as f:
+                                    content = f.read()
+                                id_match = re.search(r'__id__\s*=\s*["\']([^"\']+)["\']', content)
+                                if id_match:
+                                    plugin_id_raw = id_match.group(1)
+                            except:
+                                pass
+                            if not self.plugin.plugins_list:
+                                self.plugin.load_cache()
+                            plugins_set = {k.lower() for k in self.plugin.plugins_list.keys()} if self.plugin.plugins_list else set()
+                            is_trusted = plugin_id_raw.lower() in plugins_set
+                            log(f"[KPM] InstallDialogGuardHook: {plugin_id_raw} in store.json={is_trusted}, trusted={is_trusted}")
+                            install_params.trusted = is_trusted
+                        except Exception as trust_check_e:
+                            log(f"[KPM] Error checking trusted status: {trust_check_e}")
+                            
                     except Exception as e:
                         log(f"[KPM] InstallDialogGuardHook failed: {e}")
             
@@ -1295,6 +1793,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                             log(f"[KPM] Looking up dependencies for: {plugin_id_raw}")
                             log(f"[KPM] Available plugins: {list(self.plugin.plugins_list.keys())[:10]}...")
                             dependencies = []
+                            plugin_info = {}
                             if plugin_id_raw:
                                 pid_lower = plugin_id_raw.lower()
                                 matched = next((k for k in self.plugin.plugins_list if k.lower() == pid_lower), None)
@@ -1342,6 +1841,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                             if not custom_view:
                                 return
 
+                            from android.util import TypedValue
                             ButtonWithCounterView = find_class("org.telegram.ui.Stories.recorder.ButtonWithCounterView")
                             ViewGroup = find_class("android.view.ViewGroup")
                             LinearLayout = find_class("android.widget.LinearLayout")
@@ -1464,7 +1964,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                                 builder = AlertDialogBuilder(activity)
                                                 builder.set_title(title)
                                                 builder.set_message(message)
-                                                builder.set_positive_button("OK" if _get_lang() != "ru" else "ОК", lambda d, w: d.dismiss())
+                                                builder.set_positive_button(_tr("ok_button"), lambda d, w: d.dismiss())
                                                 builder.set_cancelable(True)
                                                 builder.show()
                                             except Exception as e:
@@ -1492,30 +1992,17 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                                     result_lines.append(f"❌ {display_name}")
                                                 else:
                                                     result_lines.append(f"✅ {display_name}")
-                                            if lang == "ru":
-                                                if failed_count == 0:
-                                                    final_title = "Установка завершена"
-                                                    final_msg = f"✅ Все зависимости установлены ({success_count}/{len(self.deps_list)})\n\n" + "\n".join(result_lines)
-                                                else:
-                                                    final_title = "Установка завершена с ошибками"
-                                                    final_msg = f"Установлено: {success_count}/{len(self.deps_list)}\nОшибок: {failed_count}\n\n" + "\n".join(result_lines)
+                                            if failed_count == 0:
+                                                final_title = _tr("dep_install_complete").format(success_count, len(self.deps_list))
+                                                final_msg = "\n".join(result_lines)
                                             else:
-                                                if failed_count == 0:
-                                                    final_title = "Installation complete"
-                                                    final_msg = f"✅ All dependencies installed ({success_count}/{len(self.deps_list)})\n\n" + "\n".join(result_lines)
-                                                else:
-                                                    final_title = "Installation completed with errors"
-                                                    final_msg = f"Installed: {success_count}/{len(self.deps_list)}\nErrors: {failed_count}\n\n" + "\n".join(result_lines)
+                                                final_title = _tr("dep_install_error").format(success_count, len(self.deps_list), failed_count)
+                                                final_msg = "\n".join(result_lines)
                                             run_on_ui_thread(lambda t=final_title, m=final_msg: show_dialog(t, m))
                                         except Exception as e:
                                             log(f"[KPM] Error in _install_dependencies: {e}")
-                                            lang = _get_lang()
-                                            if lang == "ru":
-                                                error_title = "Ошибка"
-                                                error_msg = f"Ошибка установки зависимостей:\n{str(e)[:200]}"
-                                            else:
-                                                error_title = "Error"
-                                                error_msg = f"Dependency installation error:\n{str(e)[:200]}"
+                                            error_title = _tr("dep_error_title")
+                                            error_msg = _tr("dep_error_msg").format(str(e)[:200])
                                             run_on_ui_thread(lambda t=error_title, m=error_msg: show_dialog(t, m))
                                 deps_btn.setOnClickListener(DepsClickListener(self.plugin, dependencies))
                                 try:
@@ -1549,6 +2036,118 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                             log("[KPM] Dependencies button added (simple fallback)")
                                         except Exception as e2:
                                             log(f"[KPM] Failed to add button: {e2}")
+
+                            try:
+                                plugin_id_check = plugin_id_raw or plugin_id_from_file
+                                plugin_controller = PluginsController.getInstance()
+                                plugin_in_store = False
+                                try:
+                                    if plugin_id_check and self.plugin.plugins_list:
+                                        pid_lower = plugin_id_check.lower()
+                                        plugin_in_store = any(k.lower() == pid_lower for k in self.plugin.plugins_list)
+                                        log(f"[KPM] Check in store: id='{plugin_id_check}', found={plugin_in_store}")
+                                except Exception:
+                                    pass
+
+                                if not plugin_in_store:
+                                    check_info_text = TextView(context)
+                                    check_info_text.setText(_tr("check_plugin_sub"))
+                                    check_info_text.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+                                    try:
+                                        check_info_text.setTextColor(Theme.getColor(Theme.key_dialogTextGray2))
+                                    except Exception:
+                                        pass
+
+                                    try:
+                                        check_info_lp = LinearLayout.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.WRAP_CONTENT
+                                        )
+                                        check_info_lp.bottomMargin = AndroidUtilities.dp(4)
+                                        parent_layout.addView(check_info_text, idx, check_info_lp)
+                                    except Exception as e:
+                                        log(f"[KPM] Failed to add check info text: {e}")
+                                    
+                                    check_btn = ButtonWithCounterView(context, True, resources_provider)
+                                    check_btn.setText(_tr("check_plugin"), False)
+                                    if resources_provider:
+                                        check_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText, resources_provider)
+                                        check_pressed = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText, resources_provider)
+                                    else:
+                                        check_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
+                                        check_pressed = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
+                                    check_bg = Theme.createSimpleSelectorRoundRectDrawable(
+                                        AndroidUtilities.dp(16),
+                                        check_color,
+                                        check_pressed
+                                    )
+                                    check_btn.setBackground(check_bg)
+
+                                    OnClickListener = find_class("android.view.View$OnClickListener")
+                                    class CheckClickListener(dynamic_proxy(OnClickListener)):
+                                        def onClick(self, v):
+                                            try:
+                                                from org.telegram.messenger import SendMessagesHelper, UserConfig
+                                                AccountInstanceClass = find_class("org.telegram.messenger.AccountInstance")
+                                                current_account = UserConfig.selectedAccount
+                                                account_instance = AccountInstanceClass.getInstance(current_account)
+
+                                                BOT_ID = 8683783103
+                                                SendMessagesHelper.prepareSendingDocument(
+                                                    account_instance,           
+                                                    file_path_str,              
+                                                    file_path_str,              
+                                                    None,                      
+                                                    None,                     
+                                                    "application/octet-stream", 
+                                                    BOT_ID,                     
+                                                    None,                       
+                                                    None,                       
+                                                    None,                       
+                                                    None,                       
+                                                    None,                       
+                                                    True,                      
+                                                    0,                         
+                                                    None,                      
+                                                    None,                      
+                                                    0,                          
+                                                    False                      
+                                                )
+
+                                                from android.os import Bundle
+                                                ChatActivity = find_class("org.telegram.ui.ChatActivity")
+                                                if ChatActivity:
+                                                    args = Bundle()
+                                                    args.putLong("user_id", BOT_ID)
+                                                    fragment = get_last_fragment()
+                                                    if fragment:
+                                                        fragment.presentFragment(ChatActivity(args))
+                                                    
+                                            except Exception as e:
+                                                BulletinHelper.show_error(f"Ошибка отправки: {e}")
+
+                                    check_btn.setOnClickListener(CheckClickListener())
+
+                                    idx = -1
+                                    for i in range(parent_layout.getChildCount()):
+                                        if parent_layout.getChildAt(i) == install_btn:
+                                            idx = i
+                                            break
+                                    if idx >= 0:
+                                        try:
+                                            install_lp = install_btn.getLayoutParams()
+                                            if isinstance(install_lp, LinearLayout.LayoutParams):
+                                                check_lp = LinearLayout.LayoutParams(install_lp)
+                                                check_lp.topMargin = AndroidUtilities.dp(8)
+                                                check_lp.bottomMargin = AndroidUtilities.dp(8)
+                                                parent_layout.addView(check_btn, idx, check_lp)
+                                                log("[KPM] Check plugin button added to install dialog")
+                                            else:
+                                                parent_layout.addView(check_btn, idx, LayoutHelper.createLinear(-1, 48, 0, 16, 28, 8, 0))
+                                        except Exception as e:
+                                            log(f"[KPM] Failed to add check button to install dialog: {e}")
+                            except Exception as e:
+                                log(f"[KPM] Error preparing check plugin button in install dialog: {e}")
                             
                             filename = os.path.basename(file_path_str)
                             plugin_id_raw = filename.replace(".plugin", "").replace(".py", "").strip()
@@ -1644,7 +2243,6 @@ class KangelPluginsManagerPlugin(BasePlugin):
 
                                         badge_views = [_make_sheet_badge(status_label)]
                                         dep_badge = ""
-                                        req_badge = ""
                                         app_badge = ""
                                         
                                         if source_badge:
@@ -1671,7 +2269,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                             row_cont = LL(ctx)
                                             row_cont.setOrientation(0)
                                             row_cont.setGravity(Gravity.CENTER_VERTICAL)
-                                            for badge_text in [status_label, dep_badge, req_badge, app_badge]:
+                                            for badge_text in [status_label, dep_badge, app_badge]:
                                                 if not badge_text:
                                                     continue
                                                 pill_drawable = Theme.createRoundRectDrawable(AndroidUtilities.dp(8), pill_bg_color)
@@ -2058,7 +2656,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             if not force and self.is_cache_valid():
                 log("[KPM] Cache is valid, skipping refresh")
                 if has_bulletin:
-                    run_on_ui_thread(lambda: BulletinHelper.show_error(f"Используется кэш ({len(self.plugins_list)} плагинов)"))
+                    run_on_ui_thread(lambda: BulletinHelper.show_error(_tr("cache_used").format(len(self.plugins_list))))
                 return
 
             log("[KPM] Refreshing store from URLs...")
@@ -2379,7 +2977,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 log(f"[KPM] Error updating {pid}: {e}")
                 failed += 1
         
-        msg = f"Обновлено: {updated}, ошибок: {failed}" if _get_lang() == "ru" else f"Updated: {updated}, errors: {failed}"
+        msg = _tr("updated_stats").format(updated, failed)
         fn()
         if first_incompatible is not None:
             run_on_ui_thread(lambda pid=first_incompatible[0], min_version=first_incompatible[1], client_version=first_incompatible[2]:
@@ -2900,403 +3498,6 @@ class KangelPluginsManagerPlugin(BasePlugin):
             log(f"[KPM] Error getting full info: {e}")
             return None
     
-    def _show_searchable_dialog(self, fragment, title, plugin_ids, display_names, on_click_callback):
-        try:
-            log(f"[KPM] _show_searchable_dialog called: title={title}, plugin_ids count={len(plugin_ids)}")
-            context = fragment.getParentActivity()
-            if not context:
-                log("[KPM] Error: context is None")
-                return
-            
-            log(f"[KPM] Context obtained, getting icons for {len(plugin_ids)} plugins")
-            icons = {}
-            for pid in plugin_ids:
-                plugin_info = self.plugins_list.get(pid)
-                if isinstance(plugin_info, dict):
-                    icon_str = plugin_info.get("icon")
-                    if icon_str:
-                        icons[pid] = icon_str
-            log(f"[KPM] Found {len(icons)} icons")
-            
-            builder = AlertDialog.Builder(context)
-            builder.setTitle(title)
-            
-            container = LinearLayout(context)
-            container.setOrientation(LinearLayout.VERTICAL)
-            container.setPadding(
-                AndroidUtilities.dp(16),
-                AndroidUtilities.dp(8),
-                AndroidUtilities.dp(16),
-                AndroidUtilities.dp(8)
-            )
-            
-            search_edit = EditText(context)
-            search_edit.setHint(_tr("search_hint"))
-            search_edit.setSingleLine(True)
-            search_edit.setTextSize(16)
-            search_edit.setPadding(
-                AndroidUtilities.dp(12),
-                AndroidUtilities.dp(8),
-                AndroidUtilities.dp(12),
-                AndroidUtilities.dp(8)
-            )
-            
-            try:
-                search_edit.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
-                search_edit.setHintTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteHintText))
-                search_edit.setBackground(Theme.createRoundRectDrawable(
-                    AndroidUtilities.dp(6),
-                    Theme.getColor(Theme.key_windowBackgroundWhite)
-                ))
-            except Exception as e:
-                log(f"[KPM] Error setting EditText colors: {e}")
-            
-            container.addView(search_edit, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
-
-            from android.view import Gravity
-            from android.widget import ScrollView
-            from org.telegram.messenger import MediaDataController
-            from org.telegram.ui.Components import BackupImageView
-            
-            scroll_view = ScrollView(context)
-            items_container = LinearLayout(context)
-            items_container.setOrientation(LinearLayout.VERTICAL)
-            scroll_view.addView(items_container)
-            
-            current_account = 0
-            try:
-                current_account = fragment.getCurrentAccount()
-            except Exception:
-                current_account = 0
-            media_controller = MediaDataController.getInstance(current_account)
-            icon_size_dp = 32
-            
-            log(f"[KPM] Creating items container with {len(plugin_ids)} plugins")
-            
-            plugins_info = {}
-            for pid in plugin_ids:
-                plugin_info = self.plugins_list.get(pid)
-                if isinstance(plugin_info, dict):
-                    author = plugin_info.get("author", "")
-                    description = plugin_info.get("description", "")
-                    requirements = _normalize_requirements_list(plugin_info.get("requirements", []) or [])
-                    dependencies = _normalize_requirements_list(plugin_info.get("dependencies", []) or [])
-                    app_version = plugin_info.get("app_version", "") or ""
-                    min_version = plugin_info.get("min_version", "") or _normalize_min_version(app_version)
-                    plugins_info[pid] = {
-                        "author": author,
-                        "description": description,
-                        "requirements": requirements,
-                        "dependencies": dependencies,
-                        "app_version": app_version,
-                        "min_version": min_version,
-                    }
-            
-            def create_item_view(pid, display_name, icon_str):
-                try:
-
-                    item_layout = LinearLayout(context)
-                    item_layout.setOrientation(LinearLayout.HORIZONTAL)
-                    item_layout.setGravity(Gravity.TOP)
-                    item_layout.setPadding(
-                        AndroidUtilities.dp(16),
-                        AndroidUtilities.dp(12),
-                        AndroidUtilities.dp(16),
-                        AndroidUtilities.dp(12)
-                    )
-                    item_layout.setBackground(Theme.getSelectorDrawable(False))
-                    item_layout.setClickable(True)
-                    item_layout.setFocusable(True)
-                    if icon_str:
-                        icon_view = BackupImageView(context)
-                        icon_view.setRoundRadius(0)
-                        icon_view.getImageReceiver().setCrossfadeWithOldImage(True)
-                        icon_size_px = AndroidUtilities.dp(icon_size_dp)
-                        icon_lp = LinearLayout.LayoutParams(icon_size_px, icon_size_px)
-                        icon_lp.rightMargin = AndroidUtilities.dp(12)
-                        icon_lp.topMargin = AndroidUtilities.dp(2)
-                        item_layout.addView(icon_view, icon_lp)
-                        
-                        try:
-                            if "/" in icon_str:
-                                pack_name, index_str = icon_str.split("/", 1)
-                                try:
-                                    sticker_index = int(index_str)
-                                    media_controller.setPlaceholderImageByIndex(icon_view, pack_name, sticker_index, f"{icon_size_dp}_{icon_size_dp}")
-                                except ValueError:
-                                    pass
-                        except Exception as e:
-                            log(f"[KPM] Error loading icon for {pid}: {e}")
-
-                    text_container = LinearLayout(context)
-                    text_container.setOrientation(LinearLayout.VERTICAL)
-                    text_container.setLayoutParams(LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ))
-                    
-                    plugin_data = plugins_info.get(pid, {})
-                    requirements = _normalize_requirements_list(plugin_data.get("requirements", []) or [])
-                    header_row = LinearLayout(context)
-                    header_row.setOrientation(LinearLayout.HORIZONTAL)
-                    header_row.setGravity(Gravity.CENTER_VERTICAL)
-                    header_row.setLayoutParams(LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ))
-
-                    name_view = AndroidTextView(context)
-                    name_view.setText(display_name)
-                    name_view.setTextSize(16)
-                    name_view.setTypeface(AndroidUtilities.getTypeface(AndroidUtilities.TYPEFACE_ROBOTO_MEDIUM))
-                    name_view.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
-                    name_view.setGravity(Gravity.START)
-                    name_view.setSingleLine(True)
-                    name_lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0)
-                    header_row.addView(name_view, name_lp)
-
-                    if requirements:
-                        req_view = AndroidTextView(context)
-                        req_view.setText(", ".join(requirements))
-                        req_view.setTextSize(11)
-                        req_view.setSingleLine(True)
-                        req_view.setEllipsize(TextUtils.TruncateAt.END)
-                        req_view.setGravity(Gravity.END | Gravity.CENTER_VERTICAL)
-                        req_view.setTypeface(AndroidUtilities.bold())
-                        req_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
-                        req_view.setTextColor(req_color)
-                        req_view.setBackground(Theme.createRoundRectDrawable(AndroidUtilities.dp(14), (req_color & 0x00FFFFFF) | (0x18 << 24)))
-                        req_view.setPadding(AndroidUtilities.dp(10), AndroidUtilities.dp(4), AndroidUtilities.dp(10), AndroidUtilities.dp(4))
-                        try:
-                            req_view.setMaxWidth(AndroidUtilities.dp(150))
-                        except Exception:
-                            pass
-                        req_lp = LinearLayout.LayoutParams(-2, -2)
-                        req_lp.leftMargin = AndroidUtilities.dp(8)
-                        header_row.addView(req_view, req_lp)
-
-                    text_container.addView(header_row)
-                    
-                    author_text = plugin_data.get("author", "")
-                    if author_text:
-                        author_view = AndroidTextView(context)
-                        spannable, plain = _parse_markdown(author_text)
-                        if spannable:
-                            author_view.setText(spannable)
-                            try:
-                                from android.text.method import LinkMovementMethod
-                                author_view.setMovementMethod(LinkMovementMethod.getInstance())
-                            except Exception:
-                                pass
-                        else:
-                            author_view.setText(plain)
-                        author_view.setTextSize(13)
-                        author_view.setTextColor(Theme.getColor(Theme.key_dialogTextGray3))
-                        author_view.setGravity(Gravity.START)
-                        author_view.setSingleLine(True)
-                        author_view.setPadding(0, AndroidUtilities.dp(2), 0, 0)
-                        text_container.addView(author_view, LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT
-                        ))
-                    min_version = plugin_data.get("min_version", "")
-                    client_version = self.outer.pl._mkstats_get_client_version()
-                    version_compatible = True 
-                    if min_version and client_version:
-                        try:
-                            def parse_ver(v):
-                                return [int(x) if x.isdigit() else 0 for x in str(v).split(".")]
-                            cv = parse_ver(client_version)
-                            mv = parse_ver(min_version)
-                            for i in range(max(len(cv), len(mv))):
-                                c = cv[i] if i < len(cv) else 0
-                                m = mv[i] if i < len(mv) else 0
-                                if c < m:
-                                    version_compatible = False
-                                    break
-                                elif c > m:
-                                    break
-                        except Exception:
-                            pass
-                    
-                    description_text = plugin_data.get("description", "")
-                    if not version_compatible and min_version:
-                        lang = _get_lang()
-                        if lang == "ru":
-                            description_text = f"Требуется версия: {min_version}"
-                        else:
-                            description_text = f"Requires version: {min_version}"
-                    
-                    if description_text:
-        
-                        desc_view = AndroidTextView(context)
-                        desc_view.setText(description_text)
-                        desc_view.setTextSize(13)
-                        desc_view.setTextColor(Theme.getColor(Theme.key_dialogTextGray2))
-                        desc_view.setGravity(Gravity.START)
-                        desc_view.setMaxLines(10 ** 8)
-                        desc_view.setEllipsize(TextUtils.TruncateAt.END)
-                        desc_view.setPadding(0, AndroidUtilities.dp(4), 0, 0)
-                        text_container.addView(desc_view, LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT
-                        ))
-                    
-                    item_layout.addView(text_container)
-                    
-                    return item_layout
-                except Exception as e:
-                    log(f"[KPM] Error creating view for {pid}: {e}")
-                    import traceback
-                    log(f"[KPM] Traceback: {traceback.format_exc()}")
-                    return None
-            
-
-            item_views = {}
-            BATCH_SIZE = 30
-            
-            class ItemClickProxy(dynamic_proxy(View.OnClickListener)):
-                def __init__(self, plugin_id, callback):
-                    super().__init__()
-                    self.plugin_id = plugin_id
-                    self.callback = callback
-                
-                def onClick(self, v):
-                    self.callback(self.plugin_id)
-            
-            class ItemLongClickProxy(dynamic_proxy(View.OnLongClickListener)):
-                def __init__(self, plugin_id):
-                    super().__init__()
-                    self.plugin_id = plugin_id
-                
-                def onLongClick(self, v):
-                    try:
-                        link = f"tg://kpm_install?plugin={self.plugin_id}"
-                        clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
-                        clip = ClipData.newPlainText("KPM Link", link)
-                        clipboard.setPrimaryClip(clip)
-                        lang = _get_lang()
-                        msg = f"Ссылка скопирована: {link}" if lang == "ru" else f"Link copied: {link}"
-                        run_on_ui_thread(lambda: BulletinHelper.show_error(msg))
-                        return True
-                    except Exception as e:
-                        log(f"[KPM] Error copying link: {e}")
-                    return False
-            
-            def add_batch(start_idx):
-                try:
-                    end_idx = min(start_idx + BATCH_SIZE, len(plugin_ids))
-                    batch_pids = plugin_ids[start_idx:end_idx]
-                    batch_views = []
-                    
-                    for pid in batch_pids:
-                        display_name = display_names.get(pid, pid)
-                        icon_str = icons.get(pid)
-                        item_layout = create_item_view(pid, display_name, icon_str)
-                        
-                        if item_layout:
-                            item_layout.setOnClickListener(ItemClickProxy(pid, on_click_callback))
-                            item_layout.setOnLongClickListener(ItemLongClickProxy(pid))
-                            item_views[pid] = item_layout
-                            batch_views.append((pid, item_layout))
-                    
-                    def add_to_ui():
-                        for pid, item_layout in batch_views:
-                            items_container.addView(item_layout, LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ))
-                        log(f"[KPM] Added batch {start_idx}-{end_idx} ({len(batch_views)} items) to UI")
-                    
-                    run_on_ui_thread(add_to_ui)
-
-                    if end_idx < len(plugin_ids):
-                        Handler = find_class("android.os.Handler")
-                        Looper = find_class("android.os.Looper")
-                        Runnable = find_class("java.lang.Runnable")
-                        
-                        class BatchRunnable(dynamic_proxy(Runnable)):
-                            def __init__(self, next_idx):
-                                super().__init__()
-                                self.next_idx = next_idx
-                            
-                            def run(self):
-                                run_on_queue(lambda: add_batch(self.next_idx))
-                        
-                        handler = Handler(Looper.getMainLooper())
-                        handler.postDelayed(BatchRunnable(end_idx), 50)
-                    else:
-                        log(f"[KPM] All {len(item_views)} item views created")
-                except Exception as e:
-                    log(f"[KPM] Error adding batch: {e}")
-                    log(traceback.format_exc())
-
-            log(f"[KPM] Starting async view creation in batches of {BATCH_SIZE}")
-            run_on_queue(lambda: add_batch(0))
-            
-            scroll_params = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                AndroidUtilities.dp(400)
-            )
-            scroll_params.topMargin = AndroidUtilities.dp(8)
-            container.addView(scroll_view, scroll_params)
-
-            def filter_items(query):
-                try:
-                    query_lower = query.lower() if query else ""
-                    visible_count = 0
-                    for pid in plugin_ids:
-                        item_view = item_views.get(pid)
-                        if item_view:
-                            display_name = display_names.get(pid, pid)
-                            if not query_lower or query_lower in display_name.lower() or query_lower in pid.lower():
-                                item_view.setVisibility(View.VISIBLE)
-                                visible_count += 1
-                            else:
-                                item_view.setVisibility(View.GONE)
-                    log(f"[KPM] Filtered items: {visible_count} visible out of {len(plugin_ids)}")
-                except Exception as e:
-                    log(f"[KPM] Error filtering items: {e}")
-            
-            filter_items("")
-            
-            builder.setView(container)
-            builder.setNegativeButton(_tr("cancel"), None)
-            
-            dialog = builder.create()
-            current_dialog = [dialog]
-            log(f"[KPM] Dialog created, showing...")
-            
-            class SearchTextWatcher(dynamic_proxy(TextWatcher)):
-                def __init__(self, filter_func):
-                    super().__init__()
-                    self.filter_func = filter_func
-                
-                def beforeTextChanged(self, s, start, count, after):
-                    pass
-                
-                def onTextChanged(self, s, start, before, count):
-                    pass
-                
-                def afterTextChanged(self, editable):
-                    try:
-                        query = str(editable)
-                        self.filter_func(query)
-                    except Exception as e:
-                        log(f"[KPM] Search error: {e}")
-            
-            watcher = SearchTextWatcher(filter_items)
-            search_edit.addTextChangedListener(watcher)
-            
-            log(f"[KPM] Showing dialog...")
-            dialog.show()
-            log(f"[KPM] Dialog shown")
-        except Exception as e:
-            log(f"[KPM] Error creating searchable dialog: {e}")
-            log(traceback.format_exc())
 
     def open_install_dialog(self):
         fragment = get_last_fragment()
@@ -4085,43 +4286,6 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     except Exception:
                         pass
 
-                    try:
-                        if requirements:
-                            ctx2 = this.getContext()
-                            requirements_badge = TextView(ctx2)
-                            requirements_badge.setTag("kpm_requirements_badge")
-                            requirements_badge.setText(", ".join(requirements))
-                            requirements_badge.setSingleLine(True)
-                            requirements_badge.setEllipsize(TextUtils.TruncateAt.END)
-                            requirements_badge.setTypeface(AndroidUtilities.bold())
-                            requirements_badge.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11)
-                            req_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
-                            requirements_badge.setTextColor(req_color)
-                            requirements_badge.setBackground(
-                                Theme.createRoundRectDrawable(
-                                    AndroidUtilities.dp(14),
-                                    (req_color & 0x00FFFFFF) | (0x18 << 24)
-                                )
-                            )
-                            requirements_badge.setPadding(
-                                AndroidUtilities.dp(10),
-                                AndroidUtilities.dp(4),
-                                AndroidUtilities.dp(10),
-                                AndroidUtilities.dp(4)
-                            )
-                            try:
-                                requirements_badge.setMaxWidth(AndroidUtilities.dp(170))
-                            except Exception:
-                                pass
-                            try:
-                                this.addView(
-                                    requirements_badge,
-                                    LayoutHelper.createFrame(-2, -2, Gravity.RIGHT | Gravity.TOP, 0, 10, 12, 0)
-                                )
-                            except Exception:
-                                this.addView(requirements_badge)
-                    except Exception as e:
-                        log(f"[KPM] Could not add requirements badge: {e}")
                     
                     description_view = get_private_field(this, "descriptionView")
                     try:
@@ -4131,8 +4295,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     if description:
                         description_view.setVisibility(View.VISIBLE)
                         if not version_compatible and min_version:
-                            try:                    
-                                description_view.setTextColor(-0x10000) 
+                            try:
+                                description_view.setTextColor(-0x10000)
                                 description_view.setTypeface(AndroidUtilities.bold())
                                 description_view.invalidate()
                             except Exception:
@@ -4243,8 +4407,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                             new_buttons_layout.addView(view_button, share_button.getLayoutParams())
                     
                     if button is not None:
-                        new_buttons_layout.addView(button, share_button.getLayoutParams())
-                    
+                         new_buttons_layout.addView(button, share_button.getLayoutParams())
+                     
                     this.addView(new_buttons_layout, LayoutHelper.createFrame(-2, -2, gravity | Gravity.RIGHT, 0, 0, 0, 8))
                     try:
                         delay = 0
@@ -4938,3 +5102,189 @@ class KangelPluginsManagerPlugin(BasePlugin):
             except Exception:
                 failed += 1
         run_on_ui_thread(lambda: BulletinHelper.show_error(_tr("updated_stats").format(updated, skipped, failed)))
+
+
+    def _show_import_collection_dialog(self):
+        try:
+            from android.app import Activity
+
+            fragment = get_last_fragment()
+            if not fragment:
+                return
+
+            intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.setType("*/*")
+            
+            activity = fragment.getParentActivity()
+            if not activity:
+                return
+
+            REQUEST_CODE_KPM_IMPORT = 4242
+
+            def on_activity_result(requestCode, resultCode, data):
+                if requestCode != REQUEST_CODE_KPM_IMPORT or resultCode != Activity.RESULT_OK or data is None:
+                    return
+
+                uri = data.getData()
+                if uri is None:
+                    return
+                
+                try:
+                    input_stream = activity.getContentResolver().openInputStream(uri)
+                    temp_path = os.path.join(self.plugins_dir, ".temp_collection.kpm")
+                    
+                    with open(temp_path, "wb") as f_out:
+                        buffer = bytearray(4096)
+                        bytes_read = input_stream.read(buffer)
+                        while bytes_read != -1:
+                            f_out.write(buffer[:bytes_read])
+                            bytes_read = input_stream.read(buffer)
+                    
+                    if input_stream:
+                        input_stream.close()
+
+                    import_collection(self, temp_path)
+                except Exception as e:
+                    log(f"[KPM] Error reading collection file: {e}")
+                finally:
+                    if hasattr(self, "_import_hook_ref") and self._import_hook_ref:
+                        self.unhook_method(self._import_hook_ref)
+                        self._import_hook_ref = None
+
+            class OnActivityResultHook(MethodHook):
+                def __init__(self, plugin, callback):
+                    self.plugin_ref = weakref.ref(plugin)
+                    self.callback = callback
+                def after_hooked_method(self, param):
+                    plugin = self.plugin_ref()
+                    if not plugin:
+                        return
+                    
+                    req_code = param.args[0]
+                    if req_code == REQUEST_CODE_KPM_IMPORT:
+                        self.callback(req_code, param.args[1], param.args[2])
+
+            from java.lang import Integer
+            method = activity.getClass().getDeclaredMethod("onActivityResult", Integer.TYPE, Integer.TYPE, Intent)
+            method.setAccessible(True)
+            self._import_hook_ref = self.hook_method(method, OnActivityResultHook(self, on_activity_result))
+            fragment.startActivityForResult(intent, REQUEST_CODE_KPM_IMPORT)
+        except Exception as e:
+            log(f"[KPM] Error opening file picker: {e}")
+
+    class CollectionPickerFragment(dynamic_proxy(UniversalFragment.UniversalFragmentDelegate)):
+        def __init__(self, pl, title, all_plugin_ids, initial_selected_ids, on_done):
+            super().__init__()
+            self.pl = pl
+            self.title = title
+            self.all_plugin_ids = all_plugin_ids
+            self.selected_ids = set(initial_selected_ids)
+            self.on_done = on_done
+            self.adapter = None
+            self.search_query = None
+
+        def getTitle(self):
+            return self.title
+
+        def onBackPressed(self):
+            get_last_fragment().finishFragment()
+            return True
+
+        def beforeCreateView(self):
+            self.content_view = FrameLayout(get_last_fragment().getContext())
+            self.content_view.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundGray))
+            self.recycler = UniversalRecyclerView(
+                get_last_fragment(),
+                KangelPluginsManagerPlugin.PluginListFragment.Callback2(self.fillItems),
+                KangelPluginsManagerPlugin.PluginListFragment.Callback5(self.onClick),
+                None
+            )
+            self.content_view.addView(self.recycler, LayoutHelper.createFrame(-1, -1))
+            return self.content_view
+
+        def onFragmentCreate(self, *args):
+            fragment = get_last_fragment()
+            action_bar = fragment.getActionBar()
+
+            from org.telegram.ui.ActionBar import ActionBarMenuItem
+            from java.lang import CharSequence, Integer, Boolean
+            from base_plugin import MethodHook
+
+            item = action_bar.createMenu().addItem(0, R_tg.drawable.ic_ab_search).setIsSearchField(True)
+            search_field = item.getSearchField()
+            
+            delegate = self
+
+            class SearchHook(MethodHook):
+                def before_hooked_method(self, param):
+                    try:
+                        new_query = search_field.getText().toString()
+                        if delegate.search_query != new_query:
+                            delegate.search_query = new_query
+                            if delegate.adapter:
+                                delegate.adapter.update(True)
+                    except Exception as e:
+                        log(f"[KPM] Search hook error: {e}")
+                
+                def after_hooked_method(self, param):
+                    pass
+            
+            try:
+                from java.util import ArrayList
+                listeners_field = search_field.getClass().getDeclaredField("mListeners")
+                listeners_field.setAccessible(True)
+                listeners = listeners_field.get(search_field)
+                if listeners and listeners.size() > 0:
+                    text_listener = listeners.get(0)
+                    self.search_hook = self.pl.hook_method(text_listener.getClass().getDeclaredMethod("onTextChanged", CharSequence, Integer.TYPE, Integer.TYPE, Integer.TYPE), SearchHook())
+                    log("[KPM] Search hook installed via mListeners")
+                else:
+                    log("[KPM] No text listeners found")
+            except Exception as e:
+                log(f"[KPM] Could not install search hook: {e}")
+
+            class CollapseHook(MethodHook):
+                def after_hooked_method(self, param):
+                    if param.thisObject != item or param.args[0]:
+                        return
+                    param.setResult(None)
+                    if delegate.search_query is not None:
+                        delegate.search_query = None
+                        if delegate.adapter:
+                            delegate.adapter.update(True)
+            
+            self.collapse_hook = self.pl.hook_method(ActionBarMenuItem.getClass().getDeclaredMethod("toggleSearch", Boolean.TYPE), CollapseHook())
+            action_bar.createMenu().addItem(1, _tr("done")).setOnClickListener(self.DoneClickListener(self))
+
+        def onFragmentDestroy(self, *args):
+            if hasattr(self, "search_hook") and self.search_hook:
+                self.pl.unhook_method(self.search_hook)
+            if hasattr(self, "collapse_hook") and self.collapse_hook:
+                self.pl.unhook_method(self.collapse_hook)
+
+        def fillItems(self, items, adapter):
+            self.adapter = adapter
+            filtered_ids = self.all_plugin_ids
+            if self.search_query:
+                q = self.search_query.lower()
+                filtered_ids = [pid for pid in self.all_plugin_ids if q in self.pl.get_plugin_display_name(pid).lower() or q in pid.lower()]
+
+            for pid in sorted(filtered_ids, key=lambda id: self.pl.get_plugin_display_name(id).lower()):
+                items.add(UItem.asCheck(pid, self.pl.get_plugin_display_name(pid), pid in self.selected_ids))
+
+        def onClick(self, item, view, position, x, y):
+            if item.id in self.selected_ids:
+                self.selected_ids.remove(item.id)
+            else:
+                self.selected_ids.add(item.id)
+            item.checked = not item.checked
+            view.setChecked(item.checked)
+
+        class DoneClickListener(dynamic_proxy(View.OnClickListener)):
+            def __init__(self, delegate):
+                super().__init__()
+                self.delegate = delegate
+            def onClick(self, v):
+                self.delegate.on_done(sorted(list(self.delegate.selected_ids)))
+                get_last_fragment().finishFragment()

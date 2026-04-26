@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: KangelPluginsManager
-Version: 1.3.5.5
+Version: 1.4.0.8.3
 Summary: Kangel Plugins Manager — plugin store with easy management for exteraGram/AyuGram
 Author: ArThirtyFour
 License: MIT
@@ -19,37 +19,3 @@ Classifier: Programming Language :: Python :: 3.13
 Requires-Python: >=3.9
 Description-Content-Type: text/markdown
 Requires-Dist: requests>=2.31.0
-
-# KangelPluginsManager
-
-Plugin store and management system for exteraGram/AyuGram clients.
-
-## Installation
-
-```bash
-pip install KangelPluginsManager
-```
-
-## Usage
-
-```python
-from kangelpluginsmanager import KangelPluginsManagerPlugin
-
-# The plugin class provides full store functionality
-plugin = KangelPluginsManagerPlugin()
-```
-
-## Structure
-
-- `kangelpluginsmanager.plugin` — Main plugin class
-- `kangelpluginsmanager.methods` — Utilities, telemetry (mkStats), helpers
-- `kangelpluginsmanager.assests.locale` — Translations (en/ru)
-
-## Requirements
-
-- Python >= 3.9
-- exteraGram / AyuGram >= 12.1.1
-
-## License
-
-MIT
