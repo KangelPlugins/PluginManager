@@ -6,6 +6,7 @@ import json
 import time
 import traceback
 import shutil
+import hashlib
 
 from android import R as android_R
 from android.content import ClipboardManager, ClipData, Context, Intent
@@ -80,7 +81,7 @@ Requirements:exteraGram/AyuGram 12.5.1 or higher
 __author__ = "@ArThirtyFour | @KangelPlugins"
 __min_version__ = "12.5.1"
 __icon__ = "Kangelcons_by_fStikBot/5"
-__version__ = "1.4.1"
+__version__ = "1.4.1.1"
 
 PLUGINS_DIR = get_plugins_dir()
 KPM_PILL_ID = 34012501
@@ -128,6 +129,77 @@ class KangelPluginsManagerPlugin(BasePlugin):
         except Exception as e:
             log(f"[KPM] Failed to read plugin file info from {file_path}: {e}")
             return None, None
+
+    def _calculate_file_hash(self, file_path):
+        """
+        Вычисляет SHA256 хеш файла плагина
+        
+        Args:
+            file_path: Путь к файлу плагина
+            
+        Returns:
+            SHA256 хеш в hex формате или None если ошибка
+        """
+        try:
+            if not file_path or not os.path.exists(file_path):
+                return None
+            
+            sha256_hash = hashlib.sha256()
+            with open(file_path, "rb") as f:
+                for byte_block in iter(lambda: f.read(4096), b""):
+                    sha256_hash.update(byte_block)
+            
+            hash_value = sha256_hash.hexdigest()
+            log(f"[KPM] Calculated hash for {os.path.basename(file_path)}: {hash_value}")
+            return hash_value
+        except Exception as e:
+            log(f"[KPM] Failed to calculate file hash: {e}")
+            return None
+
+    def _check_plugin_safety(self, plugin_id, file_path):
+        """
+        Проверяет безопасность плагина по ID и хешу
+        
+        Args:
+            plugin_id: ID плагина
+            file_path: Путь к файлу плагина
+            
+        Returns:
+            (is_trusted, localization_key): Tuple
+                is_trusted: True/False - плагин доверенный
+                localization_key: ключ для локализации (_tr) или текст ошибки
+        """
+        try:
+            if not self.plugins_list:
+                self.load_cache()
+            
+            if not self.plugins_list:
+                return False, "hash_not_in_catalog"
+            plugins_set = {k.lower(): k for k in self.plugins_list.keys()} if self.plugins_list else {}
+            
+            if plugin_id.lower() not in plugins_set:
+                return False, "hash_not_in_catalog"
+            
+            real_plugin_id = plugins_set[plugin_id.lower()]
+            store_entry = self.plugins_list.get(real_plugin_id, {})
+
+            file_hash = self._calculate_file_hash(file_path)
+            if not file_hash:
+                return False, "hash_not_in_catalog"
+
+            store_hash = store_entry.get("hash")
+            if not store_hash:
+                return False, "hash_not_in_store"
+
+            if file_hash.lower() == store_hash.lower():
+                return True, "hash_trusted"
+            else:
+                return False, "hash_mismatch"
+        
+        except Exception as e:
+            log(f"[KPM] Error checking plugin safety: {e}")
+            return False, "hash_not_in_catalog"
+
 
     def _block_install_dialog_if_unsupported(self, file_path):
         try:
@@ -1731,11 +1803,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                     plugin_id_raw = id_match.group(1)
                             except:
                                 pass
-                            if not self.plugin.plugins_list:
-                                self.plugin.load_cache()
-                            plugins_set = {k.lower() for k in self.plugin.plugins_list.keys()} if self.plugin.plugins_list else set()
-                            is_trusted = plugin_id_raw.lower() in plugins_set
-                            log(f"[KPM] InstallDialogGuardHook: {plugin_id_raw} in store.json={is_trusted}, trusted={is_trusted}")
+                            is_trusted, safety_reason = self.plugin._check_plugin_safety(plugin_id_raw, file_path_str)
+                            log(f"[KPM] InstallDialogGuardHook: {plugin_id_raw} - {safety_reason}, trusted={is_trusted}")
                             install_params.trusted = is_trusted
                         except Exception as trust_check_e:
                             log(f"[KPM] Error checking trusted status: {trust_check_e}")
@@ -2041,22 +2110,40 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                 plugin_id_check = plugin_id_raw or plugin_id_from_file
                                 plugin_controller = PluginsController.getInstance()
                                 plugin_in_store = False
+                                is_safe = False
+                                safety_info = ""
+                                
                                 try:
                                     if plugin_id_check and self.plugin.plugins_list:
+                                        is_safe, safety_info = self.plugin._check_plugin_safety(plugin_id_check, file_path_str)
                                         pid_lower = plugin_id_check.lower()
                                         plugin_in_store = any(k.lower() == pid_lower for k in self.plugin.plugins_list)
-                                        log(f"[KPM] Check in store: id='{plugin_id_check}', found={plugin_in_store}")
-                                except Exception:
+                                        log(f"[KPM] Check in store: id='{plugin_id_check}', found={plugin_in_store}, safe={is_safe}, info={safety_info}")
+                                except Exception as e:
+                                    log(f"[KPM] Error checking plugin safety: {e}")
                                     pass
-
-                                if not plugin_in_store:
+                                try:
+                                    if is_safe and plugin_in_store:
+                                        check_color_val = 0xFF4CAF50
+                                        check_text = _tr(safety_info) if isinstance(safety_info, str) else safety_info
+                                    elif plugin_in_store:
+                                        check_color_val = 0xFFFF5722 
+                                        check_text = _tr(safety_info) if isinstance(safety_info, str) else safety_info
+                                    else:
+                                        check_color_val = 0xFFFFC107  
+                                        check_text = _tr("hash_not_in_catalog")
+                                    
                                     check_info_text = TextView(context)
-                                    check_info_text.setText(_tr("check_plugin_sub"))
+                                    check_info_text.setText(check_text)
                                     check_info_text.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+                                    
                                     try:
-                                        check_info_text.setTextColor(Theme.getColor(Theme.key_dialogTextGray2))
+                                        check_info_text.setTextColor(int(check_color_val))
                                     except Exception:
-                                        pass
+                                        try:
+                                            check_info_text.setTextColor(Theme.getColor(Theme.key_dialogTextGray2))
+                                        except Exception:
+                                            pass
 
                                     try:
                                         check_info_lp = LinearLayout.LayoutParams(
@@ -2067,87 +2154,91 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                         parent_layout.addView(check_info_text, idx, check_info_lp)
                                     except Exception as e:
                                         log(f"[KPM] Failed to add check info text: {e}")
-                                    
-                                    check_btn = ButtonWithCounterView(context, True, resources_provider)
-                                    check_btn.setText(_tr("check_plugin"), False)
-                                    if resources_provider:
-                                        check_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText, resources_provider)
-                                        check_pressed = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText, resources_provider)
-                                    else:
-                                        check_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
-                                        check_pressed = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
-                                    check_bg = Theme.createSimpleSelectorRoundRectDrawable(
-                                        AndroidUtilities.dp(16),
-                                        check_color,
-                                        check_pressed
-                                    )
-                                    check_btn.setBackground(check_bg)
-
-                                    OnClickListener = find_class("android.view.View$OnClickListener")
-                                    class CheckClickListener(dynamic_proxy(OnClickListener)):
-                                        def onClick(self, v):
-                                            try:
-                                                from org.telegram.messenger import SendMessagesHelper, UserConfig
-                                                AccountInstanceClass = find_class("org.telegram.messenger.AccountInstance")
-                                                current_account = UserConfig.selectedAccount
-                                                account_instance = AccountInstanceClass.getInstance(current_account)
-
-                                                BOT_ID = 8683783103
-                                                SendMessagesHelper.prepareSendingDocument(
-                                                    account_instance,           
-                                                    file_path_str,              
-                                                    file_path_str,              
-                                                    None,                      
-                                                    None,                     
-                                                    "application/octet-stream", 
-                                                    BOT_ID,                     
-                                                    None,                       
-                                                    None,                       
-                                                    None,                       
-                                                    None,                       
-                                                    None,                       
-                                                    True,                      
-                                                    0,                         
-                                                    None,                      
-                                                    None,                      
-                                                    0,                          
-                                                    False                      
-                                                )
-
-                                                from android.os import Bundle
-                                                ChatActivity = find_class("org.telegram.ui.ChatActivity")
-                                                if ChatActivity:
-                                                    args = Bundle()
-                                                    args.putLong("user_id", BOT_ID)
-                                                    fragment = get_last_fragment()
-                                                    if fragment:
-                                                        fragment.presentFragment(ChatActivity(args))
-                                                    
-                                            except Exception as e:
-                                                BulletinHelper.show_error(f"Ошибка отправки: {e}")
-
-                                    check_btn.setOnClickListener(CheckClickListener())
-
-                                    idx = -1
-                                    for i in range(parent_layout.getChildCount()):
-                                        if parent_layout.getChildAt(i) == install_btn:
-                                            idx = i
-                                            break
-                                    if idx >= 0:
+                                    if not plugin_in_store:
                                         try:
-                                            install_lp = install_btn.getLayoutParams()
-                                            if isinstance(install_lp, LinearLayout.LayoutParams):
-                                                check_lp = LinearLayout.LayoutParams(install_lp)
-                                                check_lp.topMargin = AndroidUtilities.dp(8)
-                                                check_lp.bottomMargin = AndroidUtilities.dp(8)
-                                                parent_layout.addView(check_btn, idx, check_lp)
-                                                log("[KPM] Check plugin button added to install dialog")
+                                            check_btn = ButtonWithCounterView(context, True, resources_provider)
+                                            check_btn.setText(_tr("check_plugin"), False)
+                                            if resources_provider:
+                                                check_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText, resources_provider)
+                                                check_pressed = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText, resources_provider)
                                             else:
-                                                parent_layout.addView(check_btn, idx, LayoutHelper.createLinear(-1, 48, 0, 16, 28, 8, 0))
+                                                check_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
+                                                check_pressed = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
+                                            check_bg = Theme.createSimpleSelectorRoundRectDrawable(
+                                                AndroidUtilities.dp(16),
+                                                check_color,
+                                                check_pressed
+                                            )
+                                            check_btn.setBackground(check_bg)
+
+                                            OnClickListener = find_class("android.view.View$OnClickListener")
+                                            class CheckClickListener(dynamic_proxy(OnClickListener)):
+                                                def onClick(self, v):
+                                                    try:
+                                                        from org.telegram.messenger import SendMessagesHelper, UserConfig
+                                                        AccountInstanceClass = find_class("org.telegram.messenger.AccountInstance")
+                                                        current_account = UserConfig.selectedAccount
+                                                        account_instance = AccountInstanceClass.getInstance(current_account)
+
+                                                        BOT_ID = 8683783103
+                                                        SendMessagesHelper.prepareSendingDocument(
+                                                            account_instance,           
+                                                            file_path_str,              
+                                                            file_path_str,              
+                                                            None,                      
+                                                            None,                     
+                                                            "application/octet-stream", 
+                                                            BOT_ID,                     
+                                                            None,                       
+                                                            None,                       
+                                                            None,                       
+                                                            None,                       
+                                                            None,                       
+                                                            True,                      
+                                                            0,                         
+                                                            None,                      
+                                                            None,                      
+                                                            0,                          
+                                                            False                      
+                                                        )
+
+                                                        from android.os import Bundle
+                                                        ChatActivity = find_class("org.telegram.ui.ChatActivity")
+                                                        if ChatActivity:
+                                                            args = Bundle()
+                                                            args.putLong("user_id", BOT_ID)
+                                                            fragment = get_last_fragment()
+                                                            if fragment:
+                                                                fragment.presentFragment(ChatActivity(args))
+                                                        
+                                                    except Exception as e:
+                                                        BulletinHelper.show_error(f"Ошибка отправки: {e}")
+
+                                            check_btn.setOnClickListener(CheckClickListener())
+                                            idx = -1
+                                            for i in range(parent_layout.getChildCount()):
+                                                if parent_layout.getChildAt(i) == install_btn:
+                                                    idx = i
+                                                    break
+                                            if idx >= 0:
+                                                try:
+                                                    install_lp = install_btn.getLayoutParams()
+                                                    if isinstance(install_lp, LinearLayout.LayoutParams):
+                                                        check_lp = LinearLayout.LayoutParams(install_lp)
+                                                        check_lp.topMargin = AndroidUtilities.dp(8)
+                                                        check_lp.bottomMargin = AndroidUtilities.dp(8)
+                                                        parent_layout.addView(check_btn, idx, check_lp)
+                                                        log("[KPM] Check plugin button added to install dialog")
+                                                    else:
+                                                        parent_layout.addView(check_btn, idx, LayoutHelper.createLinear(-1, 48, 0, 16, 28, 8, 0))
+                                                except Exception as e:
+                                                    log(f"[KPM] Failed to add check button to install dialog: {e}")
                                         except Exception as e:
-                                            log(f"[KPM] Failed to add check button to install dialog: {e}")
+                                            log(f"[KPM] Error preparing check plugin button in install dialog: {e}")
+                                except Exception as e:
+                                    log(f"[KPM] Error in install sheet hook: {e}")
                             except Exception as e:
-                                log(f"[KPM] Error preparing check plugin button in install dialog: {e}")
+                                log(f"[KPM] Error in install sheet setup: {e}")
                             
                             filename = os.path.basename(file_path_str)
                             plugin_id_raw = filename.replace(".plugin", "").replace(".py", "").strip()
@@ -2701,6 +2792,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                         normalized[pid]["app_version"] = value.get("app_version")
                                         if not normalized[pid].get("min_version"):
                                             normalized[pid]["min_version"] = _normalize_min_version(value.get("app_version"))
+                                    if value.get("hash"):
+                                        normalized[pid]["hash"] = value.get("hash")
                                     normalized[pid]["status"] = value.get("status", "plugin")
                             
 

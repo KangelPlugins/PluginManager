@@ -148,9 +148,13 @@
     "kpm_install": "Install KPM",
     "kpm_not_installed": "KPM is not installed",
     "open_file_error": "File not found",
-    "read_file_error": "Cannot read file"
-  },
-  "ru": {
+     "read_file_error": "Cannot read file",
+     "hash_trusted": "✅ Plugin trusted (ID and hash match)",
+     "hash_mismatch": "❌ WARNING: Hash doesn't match store!",
+     "hash_not_in_store": "⚠️ Hash not in store (ID matches)",
+     "hash_not_in_catalog": "❌ Plugin not in store"
+   },
+   "ru": {
     "header": "Kangel Plugins Manager",
     "updates_header": "Обновления",
     "actions_header": "Действия",
@@ -296,11 +300,15 @@
     "collection_pick_plugins": "Выбрать плагины",
     "collection_plugins_count": "Плагинов: {}",
     "collection_plugins_more": "... и ещё {}",
-    "collection_plugins_empty": "Плагины не выбраны",
-    "done": "Готово",
-    "back": "Назад",
-    "cache_used": "Cache used ({} plugins)"
-  },
+     "collection_plugins_empty": "Плагины не выбраны",
+     "done": "Готово",
+     "back": "Назад",
+     "cache_used": "Cache used ({} plugins)",
+     "hash_trusted": "✅ Плагин доверенный (ID и хеш совпадают)",
+     "hash_mismatch": "❌ ВНИМАНИЕ: Хеш не совпадает с магазином!",
+     "hash_not_in_store": "⚠️ Хеш не в магазине (ID совпадает)",
+     "hash_not_in_catalog": "❌ Плагин не в магазине"
+   },
   "uk": {
     "header": "Kangel Plugins Manager",
     "updates_header": "Оновлення",
@@ -447,9 +455,13 @@
     "collection_pick_plugins": "Вибрати плагіни",
     "collection_plugins_count": "Плагінів: {}",
     "collection_plugins_more": "... і ще {}",
-    "collection_plugins_empty": "Плагіни не вибрані",
-    "done": "Готово",
-    "back": "Назад",
-    "cache_used": "Використовується кеш ({} плагінів)"
-  }
-}
+     "collection_plugins_empty": "Плагіни не вибрані",
+     "done": "Готово",
+     "back": "Назад",
+     "cache_used": "Використовується кеш ({} плагінів)",
+     "hash_trusted": "✅ Плагін доступний (ID та хеш збігаються)",
+     "hash_mismatch": "❌ УВАГА: Хеш не збігається з магазином!",
+     "hash_not_in_store": "⚠️ Хеш не в магазині (ID збігається)",
+     "hash_not_in_catalog": "❌ Плагін не в магазині"
+   }
+ }
