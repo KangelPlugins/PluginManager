@@ -81,7 +81,7 @@ Requirements:exteraGram/AyuGram 12.5.1 or higher
 __author__ = "@ArThirtyFour | @KangelPlugins"
 __min_version__ = "12.5.1"
 __icon__ = "Kangelcons_by_fStikBot/5"
-__version__ = "1.4.1.1"
+__version__ = "1.4.2"
 
 PLUGINS_DIR = get_plugins_dir()
 KPM_PILL_ID = 34012501
@@ -131,15 +131,6 @@ class KangelPluginsManagerPlugin(BasePlugin):
             return None, None
 
     def _calculate_file_hash(self, file_path):
-        """
-        Вычисляет SHA256 хеш файла плагина
-        
-        Args:
-            file_path: Путь к файлу плагина
-            
-        Returns:
-            SHA256 хеш в hex формате или None если ошибка
-        """
         try:
             if not file_path or not os.path.exists(file_path):
                 return None
@@ -157,48 +148,29 @@ class KangelPluginsManagerPlugin(BasePlugin):
             return None
 
     def _check_plugin_safety(self, plugin_id, file_path):
-        """
-        Проверяет безопасность плагина по ID и хешу
-        
-        Args:
-            plugin_id: ID плагина
-            file_path: Путь к файлу плагина
-            
-        Returns:
-            (is_trusted, localization_key): Tuple
-                is_trusted: True/False - плагин доверенный
-                localization_key: ключ для локализации (_tr) или текст ошибки
-        """
         try:
             if not self.plugins_list:
                 self.load_cache()
-            
             if not self.plugins_list:
-                return False, "hash_not_in_catalog"
-            plugins_set = {k.lower(): k for k in self.plugins_list.keys()} if self.plugins_list else {}
-            
-            if plugin_id.lower() not in plugins_set:
-                return False, "hash_not_in_catalog"
-            
-            real_plugin_id = plugins_set[plugin_id.lower()]
-            store_entry = self.plugins_list.get(real_plugin_id, {})
+                return False
+
+            plugins_set = {k.lower(): k for k in self.plugins_list.keys()}
+            real_plugin_id = plugins_set.get(plugin_id.lower())
+            if not real_plugin_id:
+                return False
 
             file_hash = self._calculate_file_hash(file_path)
             if not file_hash:
-                return False, "hash_not_in_catalog"
+                return False
 
-            store_hash = store_entry.get("hash")
+            store_hash = self.plugins_list.get(real_plugin_id, {}).get("hash")
             if not store_hash:
-                return False, "hash_not_in_store"
+                return False
 
-            if file_hash.lower() == store_hash.lower():
-                return True, "hash_trusted"
-            else:
-                return False, "hash_mismatch"
-        
+            return file_hash.lower() == store_hash.lower()
         except Exception as e:
             log(f"[KPM] Error checking plugin safety: {e}")
-            return False, "hash_not_in_catalog"
+            return False
 
 
     def _block_install_dialog_if_unsupported(self, file_path):
@@ -265,7 +237,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
         return False
 
     def _pill_supported(self) -> bool:
-        return self._is_client_version_at_least("12.5")
+        return True
 
     def _register_kpm_pill(self):
         try:
@@ -520,13 +492,18 @@ class KangelPluginsManagerPlugin(BasePlugin):
             ),
             Text(
                 text=_tr("update_plugins"),
-                icon="menu_browser_refresh",
+                icon="msg_retry",
                 on_click=lambda _: self.open_update_dialog()
             ),
             Text(
                 text=_tr("clear_cache"),
                 icon="msg_clear",
                 on_click=lambda _: run_on_queue(lambda: self.clear_cache())
+            ),
+            Text(
+                text=_tr("ignored_updates"),
+                icon="msg_close",
+                on_click=lambda _: self._show_ignored_updates_picker()
             ),
             Divider(),
             Header(text=_tr("plugin_collections")),
@@ -922,8 +899,15 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 key="show_update_button",
                 text=_tr("show_update_button"),
                 default=True,
-                icon="menu_browser_refresh",
+                icon="msg_retry",
                 subtext=_tr("show_update_button_sub")
+            ))
+            add("smart_search", lambda: Switch(
+                key="smart_search",
+                text=_tr("smart_search"),
+                default=True,
+                icon="msg_search",
+                subtext=_tr("smart_search_sub")
             ))
             add("divider_inline", lambda: Divider())
             add("header_inline", lambda: Header(text=_tr("inline_search_header")))
@@ -965,7 +949,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                         _tr("pill_action_refresh"),
                         _tr("pill_action_settings"),
                     ],
-                    icon="menu_more",
+                    icon="abc_ic_menu_overflow_material",
                     on_change=lambda _: run_on_ui_thread(self._update_all_pills)
                 ))
 
@@ -1004,6 +988,86 @@ class KangelPluginsManagerPlugin(BasePlugin):
             ),
         ]
     
+    def _show_ignored_updates_picker(self):
+        try:
+            installed = self.list_installed_plugins()
+            if not installed:
+                BulletinHelper.show_info(_tr("no_installed"))
+                return
+
+            ignored = set(self._get_ignored_updates())
+            names = {}
+            for pid in installed:
+                names[pid] = self.get_plugin_display_name(pid)
+
+            fragment = get_last_fragment()
+            if not fragment:
+                return
+
+            delegate = self.IgnoredUpdatesPickerFragment(self, installed, names, ignored)
+            picker_fragment = UniversalFragment(delegate)
+            fragment.presentFragment(picker_fragment)
+        except Exception as e:
+            log(f"[KPM] Error showing ignored updates picker: {e}")
+
+    class IgnoredUpdatesPickerFragment(dynamic_proxy(UniversalFragment.UniversalFragmentDelegate)):
+        def __init__(self, pl, plugin_ids, names, initially_ignored):
+            super().__init__()
+            self.pl = pl
+            self.plugin_ids = plugin_ids
+            self.names = names
+            self.selected = set(initially_ignored)
+            self.adapter = None
+
+        def getTitle(self):
+            return _tr("ignored_updates")
+
+        def onBackPressed(self):
+            self._save_and_close()
+            return True
+
+        def beforeCreateView(self):
+            self.content_view = FrameLayout(get_last_fragment().getContext())
+            self.content_view.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundGray))
+            self.recycler = UniversalRecyclerView(
+                get_last_fragment(),
+                KangelPluginsManagerPlugin.PluginListFragment.Callback2(self.fillItems),
+                KangelPluginsManagerPlugin.PluginListFragment.Callback5(self.onClick),
+                None
+            )
+            self.content_view.addView(self.recycler, LayoutHelper.createFrame(-1, -1))
+            return self.content_view
+
+        def fillItems(self, items, adapter):
+            self.adapter = adapter
+            self._sorted_ids = sorted(self.plugin_ids, key=lambda p: self.names.get(p, p).lower())
+            for idx, pid in enumerate(self._sorted_ids):
+                item = UItem.asCheck(idx, self.names.get(pid, pid))
+                item.setChecked(pid in self.selected)
+                items.add(item)
+
+        def onClick(self, item, view, position, x, y):
+            idx = item.id
+            if idx < 0 or idx >= len(self._sorted_ids):
+                return
+            pid = self._sorted_ids[idx]
+            if pid in self.selected:
+                self.selected.discard(pid)
+            else:
+                self.selected.add(pid)
+            item.checked = not item.checked
+            view.setChecked(item.checked)
+
+        def _save_and_close(self):
+            try:
+                self.pl._set_ignored_updates(list(self.selected))
+                run_on_ui_thread(lambda: BulletinHelper.show_success(
+                    _tr("ignored_updates_saved").format(len(self.selected))
+                ))
+            except Exception as e:
+                log(f"[KPM] Error saving ignored updates: {e}")
+            get_last_fragment().finishFragment()
+
     def _update_drawer_menu(self):
         try:
             self.add_drawer_menu_items()
@@ -1041,7 +1105,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             Divider(),
             Text(
                 text=self._get_plugin_info_text(),
-                icon="info",
+                icon="filled_info",
                 on_click=lambda _: self._show_about_dialog()
             )
         ]
@@ -1497,7 +1561,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     res_id = text.replace(".kpm_send ", "").strip()
                     if res_id.startswith("local|") or res_id.startswith("remote|"):
                         try:
-                            log(f"[KPM InlineSend] Intercepted: res_id={res_id}, peer={getattr(params, 'peer', None)}")
+                            log(f"[KPM] Intercepted: res_id={res_id}, peer={getattr(params, 'peer', None)}")
                         except Exception:
                             pass
                         run_on_queue(lambda: self._process_inline_selection(res_id, params.peer))
@@ -1803,9 +1867,10 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                     plugin_id_raw = id_match.group(1)
                             except:
                                 pass
-                            is_trusted, safety_reason = self.plugin._check_plugin_safety(plugin_id_raw, file_path_str)
-                            log(f"[KPM] InstallDialogGuardHook: {plugin_id_raw} - {safety_reason}, trusted={is_trusted}")
-                            install_params.trusted = is_trusted
+                            is_trusted = self.plugin._check_plugin_safety(plugin_id_raw, file_path_str)
+                            plugin_in_store = any(k.lower() == plugin_id_raw.lower() for k in self.plugin.plugins_list)
+                            install_params.trusted = is_trusted and plugin_in_store
+                            log(f"[KPM] InstallDialogGuardHook: {plugin_id_raw} - trusted={is_trusted}, in_store={plugin_in_store}")
                         except Exception as trust_check_e:
                             log(f"[KPM] Error checking trusted status: {trust_check_e}")
                             
@@ -2115,46 +2180,15 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                 
                                 try:
                                     if plugin_id_check and self.plugin.plugins_list:
-                                        is_safe, safety_info = self.plugin._check_plugin_safety(plugin_id_check, file_path_str)
+                                        is_safe = self.plugin._check_plugin_safety(plugin_id_check, file_path_str)
                                         pid_lower = plugin_id_check.lower()
                                         plugin_in_store = any(k.lower() == pid_lower for k in self.plugin.plugins_list)
-                                        log(f"[KPM] Check in store: id='{plugin_id_check}', found={plugin_in_store}, safe={is_safe}, info={safety_info}")
+                                        log(f"[KPM] Check in store: id='{plugin_id_check}', found={plugin_in_store}, safe={is_safe}")
                                 except Exception as e:
                                     log(f"[KPM] Error checking plugin safety: {e}")
                                     pass
                                 try:
-                                    if is_safe and plugin_in_store:
-                                        check_color_val = 0xFF4CAF50
-                                        check_text = _tr(safety_info) if isinstance(safety_info, str) else safety_info
-                                    elif plugin_in_store:
-                                        check_color_val = 0xFFFF5722 
-                                        check_text = _tr(safety_info) if isinstance(safety_info, str) else safety_info
-                                    else:
-                                        check_color_val = 0xFFFFC107  
-                                        check_text = _tr("hash_not_in_catalog")
-                                    
-                                    check_info_text = TextView(context)
-                                    check_info_text.setText(check_text)
-                                    check_info_text.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
-                                    
-                                    try:
-                                        check_info_text.setTextColor(int(check_color_val))
-                                    except Exception:
-                                        try:
-                                            check_info_text.setTextColor(Theme.getColor(Theme.key_dialogTextGray2))
-                                        except Exception:
-                                            pass
-
-                                    try:
-                                        check_info_lp = LinearLayout.LayoutParams(
-                                            ViewGroup.LayoutParams.MATCH_PARENT,
-                                            ViewGroup.LayoutParams.WRAP_CONTENT
-                                        )
-                                        check_info_lp.bottomMargin = AndroidUtilities.dp(4)
-                                        parent_layout.addView(check_info_text, idx, check_info_lp)
-                                    except Exception as e:
-                                        log(f"[KPM] Failed to add check info text: {e}")
-                                    if not plugin_in_store:
+                                    if not plugin_in_store or not is_safe:
                                         try:
                                             check_btn = ButtonWithCounterView(context, True, resources_provider)
                                             check_btn.setText(_tr("check_plugin"), False)
@@ -2180,7 +2214,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                                         current_account = UserConfig.selectedAccount
                                                         account_instance = AccountInstanceClass.getInstance(current_account)
 
-                                                        BOT_ID = 8683783103
+                                                        BOT_ID = 8536483713
                                                         SendMessagesHelper.prepareSendingDocument(
                                                             account_instance,           
                                                             file_path_str,              
@@ -2210,7 +2244,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                                             fragment = get_last_fragment()
                                                             if fragment:
                                                                 fragment.presentFragment(ChatActivity(args))
-                                                        
+                                                    
                                                     except Exception as e:
                                                         BulletinHelper.show_error(f"Ошибка отправки: {e}")
 
@@ -2466,7 +2500,9 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 
                 def after_hooked_method(self, param):
                     try:
-                        if not self.plugin.get_setting("show_add_button", True):
+                        show_add = self.plugin.get_setting("show_add_button", True)
+                        show_update = self.plugin.get_setting("show_update_button", True)
+                        if not show_add and not show_update:
                             return
                         
                         activity = param.thisObject
@@ -2481,8 +2517,14 @@ class KangelPluginsManagerPlugin(BasePlugin):
                             return     
                         try:
                             if hasattr(menu, 'ids') and menu.ids:
-                                if 2 in [int(x) for x in menu.ids]:
-                                    log("[KPM] Button '+' already exists (checked via ids)")
+                                existing = [int(x) for x in menu.ids]
+                                if show_add and show_update and 2 in existing and 3 in existing:
+                                    return
+                                if show_add and not show_update and 2 in existing:
+                                    return
+                                if show_update and not show_add and 3 in existing:
+                                    return
+                                if show_add and 2 in existing and show_update and 3 in existing:
                                     return
                         except Exception as check_error:
                             log(f"[KPM] Could not check existing items: {check_error}")
@@ -2505,14 +2547,17 @@ class KangelPluginsManagerPlugin(BasePlugin):
                             def onClick(self, v):
                                 self.plugin_instance.open_update_dialog()
                         
-                        add_item = menu.addItem(2, R.drawable.msg_add)
-                        add_item.setOnClickListener(AddButtonClickListener(self.plugin))
-                        if self.plugin.get_setting("show_update_button", True):
-                            update_item = menu.addItem(3, R.drawable.menu_browser_refresh)
+                        added_any = False
+                        if show_add:
+                            add_item = menu.addItem(2, R.drawable.msg_add)
+                            add_item.setOnClickListener(AddButtonClickListener(self.plugin))
+                            added_any = True
+                        if show_update:
+                            update_item = menu.addItem(3, R.drawable.msg_retry)
                             update_item.setOnClickListener(UpdateButtonClickListener(self.plugin))
-                            log("[KPM] Added '+' and update buttons to PluginsActivity menu")
-                        else:
-                            log("[KPM] Added '+' button to PluginsActivity menu (update button hidden by settings)")
+                            added_any = True
+                        if added_any:
+                            log(f"[KPM] Added buttons to PluginsActivity menu: add={show_add}, update={show_update}")
                     except Exception as e:
                         log(f"[KPM] Error in PluginsActivity hook: {e}")
                         log(traceback.format_exc())
@@ -2959,6 +3004,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     return
                 self.refresh_store(force=True, has_bulletin=False)
                 
+                ignored = set(self._get_ignored_updates())
                 updates = []
                 display_names = {"d": {}, "ic": {}, "vers": {}}
                 
@@ -2982,6 +3028,9 @@ class KangelPluginsManagerPlugin(BasePlugin):
                         remote_version = str(plugin_info.get("version", "0"))
                         
                         if remote_version != local_version:
+                            if pid in ignored:
+                                log(f"[KPM] Skipping ignored update: {pid}")
+                                continue
                             updates.append(pid)
                             display_names["d"][pid] = plugin_info.get("name", pid)
                             display_names["ic"][pid] = plugin_info.get("icon")
@@ -3419,6 +3468,50 @@ class KangelPluginsManagerPlugin(BasePlugin):
             log(f"[KPM] Error creating temp file: {e}")
             return None
 
+    def _send_document_with_links(self, peer_id, file_path, display_name, install_url):
+        try:
+            log(f"[KPM] _send_document_with_links: name={display_name}, url={install_url}, peer={peer_id}")
+            caption = f"{display_name} — Install from Kangel Plugins Manager"
+            entities = ArrayList()
+
+            e1 = TLRPC.TL_messageEntityTextUrl()
+            e1.offset = 0
+            e1.length = len(display_name.encode('utf_16_le')) // 2
+            e1.url = install_url
+            entities.add(e1)
+
+            marker = "Install from "
+            kangel_start = caption.find(marker)
+            if kangel_start >= 0:
+                kangel_text_start = kangel_start + len(marker)
+                e2 = TLRPC.TL_messageEntityTextUrl()
+                e2.offset = len(caption[:kangel_text_start].encode('utf_16_le')) // 2
+                e2.length = len("Kangel Plugins Manager".encode('utf_16_le')) // 2
+                e2.url = "https://t.me/KangelPluginsManager"
+                entities.add(e2)
+
+            log(f"[KPM] Entities: e1(offset={e1.offset}, len={e1.length}, url={e1.url}), e2(offset={e2.offset}, len={e2.length}, url={e2.url})")
+
+            paths = ArrayList()
+            orig_paths = ArrayList()
+            paths.add(file_path)
+            orig_paths.add(file_path)
+
+            from org.telegram.messenger import AccountInstance, SendMessagesHelper
+            from java.lang import String as JString
+            from java import jlong
+            account = AccountInstance.getInstance(0)
+            SendMessagesHelper.prepareSendingDocuments(
+                account, paths, orig_paths, None,
+                JString(caption), entities, JString("application/octet-stream"),
+                jlong(peer_id), None, None, None, None, None,
+                True, 0, 0, None, None, 0, 0, False, 0, 0, None
+            )
+            log("[KPM] prepareSendingDocuments called successfully")
+        except Exception as e:
+            log(f"[KPM] Link send error, falling back: {e}")
+            send_document(peer_id, file_path, caption=caption)
+
     def _send_local_plugin(self, pid, peer_id):
         try:
             controller = PluginsController.getInstance()
@@ -3441,7 +3534,10 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     with open(temp_file.getAbsolutePath(), "wb") as dst:
                         dst.write(src.read())
                 
-                send_document(peer_id, temp_file.getAbsolutePath(), caption=f"Plugin: {pl.getName()}")
+                self._send_document_with_links(
+                    peer_id, temp_file.getAbsolutePath(),
+                    pl.getName(), f"tg://kpm_install?plugin={pid}"
+                )
             except Exception as e:
                 log(f"[KPM] Local send error: {e}")
         except Exception as e:
@@ -3462,7 +3558,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             try:
                 import requests
                 try:
-                    log(f"[KPM InlineSend] Download start: key={key}, url={url}, peer={peer_id}")
+                    log(f"[KPM ] Download start: key={key}, url={url}, peer={peer_id}")
                 except Exception:
                     pass
                 resp = requests.get(url, timeout=20)
@@ -3478,7 +3574,10 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 with open(temp_file.getAbsolutePath(), "wb") as dst:
                     dst.write(resp.content)
                 
-                send_document(peer_id, temp_file.getAbsolutePath(), caption=f"Plugin: {name}")
+                self._send_document_with_links(
+                    peer_id, temp_file.getAbsolutePath(),
+                    name, f"tg://kpm_install?plugin={key}"
+                )
             except Exception as e:
                 log(f"[KPM] Remote send error: {e}")
                 try:
@@ -3491,7 +3590,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
     def _process_inline_selection(self, result_id, peer_id):
         try:
             try:
-                log(f"[KPM InlineSend] Selection: result_id={result_id}, peer={peer_id}")
+                log(f"[KPM ] Selection: result_id={result_id}, peer={peer_id}")
             except Exception:
                 pass
             type_str, pid = result_id.split("|", 1)
@@ -3732,7 +3831,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     search_query = None
                 update_query(search_query)
         
-        item = fragment.getActionBar().createMenu().addItem(0, R_tg.drawable.ic_ab_search).setIsSearchField(True)
+        item = fragment.getActionBar().createMenu().addItem(0, R_tg.drawable.outline_header_search).setIsSearchField(True)
         search_field = item.getSearchField()
         listener = get_private_field(search_field, "mListeners").get(0)
         from java.lang import CharSequence
@@ -3813,7 +3912,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     txt = f"{base_title}"
                     if title_tv is not None:
                         try:
-                            title_tv.setLeftDrawable(R_tg.drawable.menu_filter)
+                            title_tv.setLeftDrawable(R_tg.drawable.menu_tag_filter)
                         except Exception:
                             pass
                         try:
@@ -4482,7 +4581,21 @@ class KangelPluginsManagerPlugin(BasePlugin):
                         def on_update():
                             self.outer.plugin_ids.remove(p.getId())
                             self.outer.adapter.update(True)
-                        button = create_button(R_tg.drawable.menu_browser_refresh, lambda: self.outer.pl.update_selected_plugins([p.getId()], on_update)) 
+                        button = create_button(R_tg.drawable.msg_retry, lambda: self.outer.pl.update_selected_plugins([p.getId()], on_update))
+
+                        ignore_button = None
+                        def on_ignore():
+                            pid = p.getId()
+                            self.outer.pl.ignore_update(pid)
+                            self.outer.plugin_ids.remove(pid)
+                            self.outer.adapter.update(True)
+                        try:
+                            ignore_button = create_button(R_tg.drawable.msg_close, on_ignore)
+                        except Exception:
+                            try:
+                                ignore_button = create_button(R_tg.drawable.msg_delete, on_ignore)
+                            except Exception:
+                                pass
                     existing_layout = this.findViewWithTag("kpm_buttons")
                     if existing_layout:
                         this.removeView(existing_layout)
@@ -4501,6 +4614,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     
                     if button is not None:
                          new_buttons_layout.addView(button, share_button.getLayoutParams())
+                    if self.outer.type == KangelPluginsManagerPlugin.UPDATE and ignore_button is not None:
+                         new_buttons_layout.addView(ignore_button, share_button.getLayoutParams())
                      
                     this.addView(new_buttons_layout, LayoutHelper.createFrame(-2, -2, gravity | Gravity.RIGHT, 0, 0, 0, 8))
                     try:
@@ -4837,7 +4952,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 return status_filter == "plugin"
             if self.search_query:
                 query = str(self.search_query)
-                if len(query.strip()) >= 3 and getattr(self.pl, "_trigram_index", None):
+                smart_search = bool(self.pl.get_setting("smart_search", True))
+                if smart_search and len(query.strip()) >= 3 and getattr(self.pl, "_trigram_index", None):
                     ranked = self.pl._trigram_search(query, allowed_ids=self.plugin_ids)
                     if ranked:
                         plugin_ids = [pid for pid in ranked if _passes_status(pid)]
@@ -5079,6 +5195,43 @@ class KangelPluginsManagerPlugin(BasePlugin):
             log(f"[KPM] Error listing installed plugins: {e}")
             return installed
 
+    def _get_ignored_updates(self):
+        try:
+            raw = self.get_setting("ignored_updates", [])
+            if isinstance(raw, list):
+                return list(raw)
+            return []
+        except Exception:
+            return []
+
+    def _set_ignored_updates(self, ids):
+        try:
+            self.set_setting("ignored_updates", list(ids))
+        except Exception as e:
+            log(f"[KPM] Error saving ignored_updates: {e}")
+
+    def ignore_update(self, plugin_id):
+        try:
+            ignored = self._get_ignored_updates()
+            if plugin_id not in ignored:
+                ignored.append(plugin_id)
+                self._set_ignored_updates(ignored)
+                log(f"[KPM] Ignored update for {plugin_id}")
+                run_on_ui_thread(lambda: BulletinHelper.show_info(_tr("update_ignored").format(plugin_id)))
+        except Exception as e:
+            log(f"[KPM] Error ignoring update: {e}")
+
+    def unignore_update(self, plugin_id):
+        try:
+            ignored = self._get_ignored_updates()
+            if plugin_id in ignored:
+                ignored.remove(plugin_id)
+                self._set_ignored_updates(ignored)
+                log(f"[KPM] Unignored update for {plugin_id}")
+                run_on_ui_thread(lambda: BulletinHelper.show_info(_tr("update_unignored").format(plugin_id)))
+        except Exception as e:
+            log(f"[KPM] Error unignoring update: {e}")
+
     def get_local_plugin_path(self, plugin_id):
         return os.path.join(PLUGINS_DIR, f"{plugin_id}.plugin")
 
@@ -5304,7 +5457,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             from java.lang import CharSequence, Integer, Boolean
             from base_plugin import MethodHook
 
-            item = action_bar.createMenu().addItem(0, R_tg.drawable.ic_ab_search).setIsSearchField(True)
+            item = action_bar.createMenu().addItem(0, R_tg.drawable.outline_header_search).setIsSearchField(True)
             search_field = item.getSearchField()
             
             delegate = self

@@ -171,6 +171,14 @@ def _get_lang():
         return "ru"
     elif lang.startswith("uk") or lang.startswith("ua"):
         return "uk"
+    elif lang.startswith("de"):
+        return "de"
+    elif lang.startswith("es"):
+        return "es"
+    elif lang.startswith("fr"):
+        return "fr"
+    elif lang.startswith("pt"):
+        return "pt"
     else:
         return "en"
 
