@@ -47,14 +47,11 @@ def build_collection_payload(metadata, plugin_ids):
 
 
 def load_collection_file(file_path):
-    # Resolve relative paths
     resolved_path = file_path
     if not os.path.isabs(file_path):
-        # Try current directory first
         if os.path.exists(file_path):
             resolved_path = os.path.abspath(file_path)
         else:
-            # Try common locations
             from client_utils import get_account_plugins_dir
             account_plugins_dir = get_account_plugins_dir() if callable(get_account_plugins_dir) else None
             if account_plugins_dir:
@@ -62,7 +59,6 @@ def load_collection_file(file_path):
                 if os.path.exists(test_path):
                     resolved_path = test_path
     
-    # Check file exists
     if not os.path.exists(resolved_path):
         log(f"[KPM] Collection file not found: {file_path} (resolved: {resolved_path})")
         raise FileNotFoundError(f"Collection file not found: {file_path}")

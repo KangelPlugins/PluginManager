@@ -81,7 +81,7 @@ Requirements:exteraGram/AyuGram 12.5.1 or higher
 __author__ = "@ArThirtyFour | @KangelPlugins"
 __min_version__ = "12.5.1"
 __icon__ = "Kangelcons_by_fStikBot/5"
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 
 PLUGINS_DIR = get_plugins_dir()
 KPM_PILL_ID = 34012501
@@ -306,7 +306,6 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 self._pill_registered = False
                 return
             if bool(self.get_setting("pill_enabled", True)):
-                self._register_kpm_pill()
                 for pill in list(self._active_pills):
                     self._apply_kpm_pill_ui(pill)
             else:
@@ -447,6 +446,11 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     create_sub_fragment=self._create_plugin_management_settings
                 ),
                 Text(
+                    text=_tr("ai_search"),
+                    icon="msg_bot",
+                    create_sub_fragment=self._create_ai_search_settings
+                ),
+                Text(
                     text=_tr("auto_updates"),
                     icon="files_storage",
                     create_sub_fragment=self._create_auto_updates_settings
@@ -519,6 +523,25 @@ class KangelPluginsManagerPlugin(BasePlugin):
             )
         ]
         return items
+
+    def _create_ai_search_settings(self):
+        return [
+            Header(text=_tr("ai_search")),
+            Input(
+                key="mistral_api_key",
+                text=_tr("ai_search_api_key"),
+                default="jgzwICGYO4KtFBC3xdiq5u1K8dsi5iWj",
+                icon="msg_permissions",
+                subtext=_tr("ai_search_api_key_sub")
+            ),
+            Input(
+                key="mistral_model",
+                text=_tr("ai_search_model"),
+                default="mistral-small-latest",
+                icon="msg_bot",
+                subtext=_tr("ai_search_model_sub")
+            )
+        ]
 
     def _get_store_picker_plugin_ids(self):
         if not self.plugins_list:
@@ -980,6 +1003,13 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 icon="msg_warning",
                 subtext=_tr("version_guard_sub")
             ),
+            Switch(
+                key="block_untrusted_plugins",
+                text=_tr("block_untrusted"),
+                default=True,
+                icon="msg_close",
+                subtext=_tr("block_untrusted_sub")
+            ),
             Divider(),
             Text(
                 text=_tr("faq"),
@@ -1380,6 +1410,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
         self.add_plugins_activity_hook()
         self._setup_kpm_file_hook()
         self._setup_settings_header_hook()
+        self.add_badge_hook()
         if self._pill_supported():
             self._register_kpm_pill()
         if self.get_setting("auto_update_on_start", False): run_on_queue(self.refresh_store)
@@ -1397,9 +1428,9 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     username = param.args[0]
                     query = param.args[1]
                     trigger = self.plugin.get_setting("inline_search_trigger", "kpm")
-                    log(f"[KPM Inline] Bot hook: username={username}, trigger={trigger}")
+                    log(f"[KPM] Bot hook: username={username}, trigger={trigger}")
                     if username and str(username).lower() == trigger.lower():
-                        log(f"[KPM Inline] Match! Processing query: {query}")
+                        log(f"[KPM] Match! Processing query: {query}")
                         param.setResult(None)
                         run_on_queue(lambda: self.plugin.process_inline_search(param.thisObject, query))
                 except Exception as e:
@@ -1431,7 +1462,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
     def process_inline_search(self, adapter, query):
         try:
             query = str(query).lower().strip() if query else ""
-            log(f"[KPM Inline] Searching for: '{query}', plugins count: {len(self.plugins_list)}")
+            log(f"[KPM] Searching for: '{query}', plugins count: {len(self.plugins_list)}")
             results = ArrayList()
             try:
                 controller = PluginsController.getInstance()
@@ -1499,7 +1530,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 except Exception as e:
                     log(f"[KPM] Error processing store plugin {pid}: {e}")
             
-            log(f"[KPM Inline] Found {results.size()} results")
+            log(f"[KPM] Found {results.size()} results")
 
             while results.size() > 50:
                 results.remove(results.size() - 1)
@@ -1528,7 +1559,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             from hook_utils import set_private_field
             from java.lang import Boolean
             
-            log(f"[KPM Inline] Injecting {results.size()} results")
+            log(f"[KPM] Injecting {results.size()} results")
             fake_bot = TLRPC.TL_user()
             fake_bot.id = 987654321
             fake_bot.username = self.get_setting("inline_search_trigger", "kpm")
@@ -1544,11 +1575,11 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     m = delegate.getClass().getDeclaredMethod("needChangePanelVisibility", Boolean.TYPE)
                     m.setAccessible(True)
                     m.invoke(delegate, True)
-                    log("[KPM Inline] Panel visibility changed to True")
+                    log("[KPM] Panel visibility changed to True")
                 except Exception as e:
-                    log(f"[KPM Inline] Failed to change panel visibility: {e}")
+                    log(f"[KPM] Failed to change panel visibility: {e}")
             else:
-                log("[KPM Inline] No delegate found")
+                log("[KPM] No delegate found")
         except Exception as e:
             log(f"[KPM] Error injecting inline results: {e}")
 
@@ -1851,8 +1882,10 @@ class KangelPluginsManagerPlugin(BasePlugin):
                         path_field = install_params.getClass().getDeclaredField("filePath")
                         path_field.setAccessible(True)
                         file_path = path_field.get(install_params)
+                        version_blocked = False
                         if file_path and self.plugin._block_install_dialog_if_unsupported(str(file_path)):
                             param.setResult(None)
+                            version_blocked = True
                         try:
                             file_path_str = str(file_path) if file_path else ""
                             filename = os.path.basename(file_path_str)
@@ -1867,10 +1900,32 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                     plugin_id_raw = id_match.group(1)
                             except:
                                 pass
-                            is_trusted = self.plugin._check_plugin_safety(plugin_id_raw, file_path_str)
-                            plugin_in_store = any(k.lower() == plugin_id_raw.lower() for k in self.plugin.plugins_list)
-                            install_params.trusted = is_trusted and plugin_in_store
-                            log(f"[KPM] InstallDialogGuardHook: {plugin_id_raw} - trusted={is_trusted}, in_store={plugin_in_store}")
+                            try:
+                                system_trusted = install_params.getTrusted()
+                            except:
+                                system_trusted = False
+                            log(f"[KPM] InstallDialogGuardHook: {plugin_id_raw} - system_trusted={system_trusted}")
+                            if system_trusted:
+                                pass
+                            else:
+                                is_trusted = self.plugin._check_plugin_safety(plugin_id_raw, file_path_str)
+                                plugin_in_store = any(k.lower() == plugin_id_raw.lower() for k in self.plugin.plugins_list)
+                                trusted_val = is_trusted and plugin_in_store
+                                try:
+                                    install_params.setTrusted(trusted_val)
+                                except:
+                                    pass
+                                log(f"[KPM] InstallDialogGuardHook: hash_check={is_trusted}, in_store={plugin_in_store}")
+                                if not trusted_val and not version_blocked:
+                                    try:
+                                        setting_val = self.plugin.get_setting("block_untrusted_plugins", True)
+                                        is_blocking = str(setting_val).lower() not in ("false", "0", "none", "no", "")
+                                        if is_blocking:
+                                            param.setResult(None)
+                                            run_on_ui_thread(lambda pid=plugin_id_raw: self.plugin._show_untrusted_warning(pid))
+                                            log(f"[KPM] Blocked untrusted plugin: {plugin_id_raw}")
+                                    except Exception as untrusted_e:
+                                        log(f"[KPM] Error blocking untrusted plugin: {untrusted_e}")
                         except Exception as trust_check_e:
                             log(f"[KPM] Error checking trusted status: {trust_check_e}")
                             
@@ -2179,14 +2234,23 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                 safety_info = ""
                                 
                                 try:
-                                    if plugin_id_check and self.plugin.plugins_list:
-                                        is_safe = self.plugin._check_plugin_safety(plugin_id_check, file_path_str)
-                                        pid_lower = plugin_id_check.lower()
-                                        plugin_in_store = any(k.lower() == pid_lower for k in self.plugin.plugins_list)
-                                        log(f"[KPM] Check in store: id='{plugin_id_check}', found={plugin_in_store}, safe={is_safe}")
-                                except Exception as e:
-                                    log(f"[KPM] Error checking plugin safety: {e}")
-                                    pass
+                                    system_trusted = install_params.getTrusted()
+                                except:
+                                    system_trusted = True
+                                if not system_trusted:
+                                    try:
+                                        if plugin_id_check and self.plugin.plugins_list:
+                                            is_safe = self.plugin._check_plugin_safety(plugin_id_check, file_path_str)
+                                            pid_lower = plugin_id_check.lower()
+                                            plugin_in_store = any(k.lower() == pid_lower for k in self.plugin.plugins_list)
+                                            log(f"[KPM] Check in store: id='{plugin_id_check}', found={plugin_in_store}, safe={is_safe}")
+                                    except Exception as e:
+                                        log(f"[KPM] Error checking plugin safety: {e}")
+                                        pass
+                                else:
+                                    is_safe = True
+                                    plugin_in_store = True
+                                    log(f"[KPM] System trusted, skipping check: id='{plugin_id_check}'")
                                 try:
                                     if not plugin_in_store or not is_safe:
                                         try:
@@ -2574,6 +2638,232 @@ class KangelPluginsManagerPlugin(BasePlugin):
             log(f"[KPM] Error adding PluginsActivity hook: {e}")
             log(traceback.format_exc())
     
+    def add_badge_hook(self):
+        try:
+            bages_path = os.path.join(os.path.dirname(__file__), 'assests', 'bages.json')
+            if not os.path.exists(bages_path):
+                log("[KPM] bages.json not found, badge hook skipped")
+                return
+            with open(bages_path, 'r', encoding='utf-8') as f:
+                self._custom_badges = json.load(f)
+            log(f"[KPM] Loaded {len(self._custom_badges)} custom badges")
+            
+            if not self._custom_badges:
+                return
+            
+            TL_bots = find_class("org.telegram.tgnet.tl.TL_bots")
+            if not TL_bots:
+                log("[KPM] TL_bots not found")
+                return
+            
+            plugin = self
+
+            try:
+                _LocaleController = find_class("org.telegram.messenger.LocaleController")
+            except Exception:
+                _LocaleController = None
+
+            def _get_badge_text(badge_info):
+                text_raw = badge_info.get("text")
+                if not text_raw:
+                    return ""
+                if isinstance(text_raw, str):
+                    return text_raw
+                if isinstance(text_raw, dict):
+                    lang = "en"
+                    try:
+                        if _LocaleController:
+                            lang = str(_LocaleController.getInstance().getCurrentLocale().getLanguage())
+                    except Exception:
+                        pass
+                    return text_raw.get(lang) or text_raw.get("en") or text_raw.get("ru") or next(iter(text_raw.values()), "")
+                return str(text_raw)
+
+            def _apply_custom_badges():
+                try:
+                    mc = get_messages_controller()
+                    if not mc:
+                        return
+                    for entity_id_str, badge_info in plugin._custom_badges.items():
+                        try:
+                            entity_id = int(entity_id_str)
+                        except:
+                            continue
+                        doc_id = badge_info.get("documentId")
+                        if not doc_id:
+                            continue
+                        text = _get_badge_text(badge_info)
+                        if entity_id > 0:
+                            entity = mc.getUser(entity_id)
+                            if not entity:
+                                continue
+                            entity.verified = False
+                            entity.fake = False
+                            entity.scam = False
+                            if hasattr(entity, 'bot_verification_icon'):
+                                entity.bot_verification_icon = int(doc_id)
+                            mc.putUser(entity, True)
+                            user_full = mc.getUserFull(entity_id)
+                            if user_full:
+                                try:
+                                    bot_verification = TL_bots.botVerification()
+                                    bot_verification.icon = int(doc_id)
+                                    bot_verification.description = str(text) if text else ""
+                                    user_full.bot_verification = bot_verification
+                                except Exception as e:
+                                    log(f"[KPM] Failed to create botVerification: {e}")
+                        else:
+                            if str(entity_id).startswith('-100'):
+                                chat_id = abs(entity_id) - 1000000000000
+                            else:
+                                chat_id = abs(entity_id)
+                            entity = mc.getChat(chat_id)
+                            if not entity:
+                                continue
+                            entity.verified = False
+                            entity.fake = False
+                            entity.scam = False
+                            if hasattr(entity, 'bot_verification_icon'):
+                                entity.bot_verification_icon = int(doc_id)
+                            mc.putChat(entity, True)
+                            chat_full = mc.getChatFull(chat_id)
+                            if chat_full:
+                                try:
+                                    bot_verification = TL_bots.botVerification()
+                                    bot_verification.icon = int(doc_id)
+                                    bot_verification.description = str(text) if text else ""
+                                    chat_full.bot_verification = bot_verification
+                                except Exception as e:
+                                    log(f"[KPM] Failed to create botVerification for chat: {e}")
+                except Exception as e:
+                    log(f"[KPM] Error applying custom badges: {e}")
+            
+            import threading
+            def _badge_loop():
+                while True:
+                    try:
+                        _apply_custom_badges()
+                        time.sleep(1)
+                    except:
+                        time.sleep(1)
+            
+            badge_thread = threading.Thread(target=_badge_loop, daemon=True)
+            badge_thread.start()
+            log("[KPM] Custom badge loop started")
+
+            MC_class = find_class("org.telegram.messenger.MessagesController")
+            if MC_class:
+                class PutUserHook(MethodHook):
+                    def before_hooked_method(self, param):
+                        try:
+                            user = param.args[0]
+                            if not user:
+                                return
+                            uid = user.id
+                            binfo = plugin._custom_badges.get(str(uid))
+                            if not binfo:
+                                return
+                            doc_id = binfo.get("documentId")
+                            if not doc_id:
+                                return
+                            user.verified = False
+                            user.fake = False
+                            user.scam = False
+                            if hasattr(user, 'bot_verification_icon'):
+                                user.bot_verification_icon = int(doc_id)
+                        except Exception:
+                            pass
+
+                class PutChatHook(MethodHook):
+                    def before_hooked_method(self, param):
+                        try:
+                            chat = param.args[0]
+                            if not chat:
+                                return
+                            cid = chat.id
+                            for eid_str, binfo in plugin._custom_badges.items():
+                                try:
+                                    eid = int(eid_str)
+                                except:
+                                    continue
+                                if eid < 0:
+                                    if str(eid).startswith('-100'):
+                                        expected = abs(eid) - 1000000000000
+                                    else:
+                                        expected = abs(eid)
+                                    if expected == cid:
+                                        doc_id = binfo.get("documentId")
+                                        if not doc_id:
+                                            break
+                                        chat.verified = False
+                                        chat.fake = False
+                                        chat.scam = False
+                                        if hasattr(chat, 'bot_verification_icon'):
+                                            chat.bot_verification_icon = int(doc_id)
+                                        break
+                        except Exception:
+                            pass
+
+                class GetUserFullHook(MethodHook):
+                    def after_hooked_method(self, param):
+                        try:
+                            user_full = param.getResult()
+                            if not user_full:
+                                return
+                            uid = int(param.args[0])
+                            binfo = plugin._custom_badges.get(str(uid))
+                            if not binfo:
+                                return
+                            doc_id = binfo.get("documentId")
+                            if not doc_id:
+                                return
+                            text = _get_badge_text(binfo)
+                            bv = TL_bots.botVerification()
+                            bv.icon = int(doc_id)
+                            bv.description = str(text) if text else ""
+                            user_full.bot_verification = bv
+                        except Exception:
+                            pass
+
+                class GetChatFullHook(MethodHook):
+                    def after_hooked_method(self, param):
+                        try:
+                            chat_full = param.getResult()
+                            if not chat_full:
+                                return
+                            cid = int(param.args[0])
+                            for eid_str, binfo in plugin._custom_badges.items():
+                                try:
+                                    eid = int(eid_str)
+                                except:
+                                    continue
+                                if eid < 0:
+                                    if str(eid).startswith('-100'):
+                                        expected = abs(eid) - 1000000000000
+                                    else:
+                                        expected = abs(eid)
+                                    if expected == cid:
+                                        doc_id = binfo.get("documentId")
+                                        if not doc_id:
+                                            break
+                                        text = _get_badge_text(binfo)
+                                        bv = TL_bots.botVerification()
+                                        bv.icon = int(doc_id)
+                                        bv.description = str(text) if text else ""
+                                        chat_full.bot_verification = bv
+                                        break
+                        except Exception:
+                            pass
+
+                plugin.hook_all_methods(MC_class, "putUser", PutUserHook())
+                plugin.hook_all_methods(MC_class, "putChat", PutChatHook())
+                plugin.hook_all_methods(MC_class, "getUserFull", GetUserFullHook())
+                plugin.hook_all_methods(MC_class, "getChatFull", GetChatFullHook())
+                log("[KPM] Hooked putUser/putChat/getUserFull/getChatFull for badges")
+        except Exception as e:
+            log(f"[KPM] Error adding badge hook: {e}")
+            log(traceback.format_exc())
+    
     def _get_dependencies_from_file(self, file_path):
         try:
             if not os.path.exists(file_path):
@@ -2747,18 +3037,20 @@ class KangelPluginsManagerPlugin(BasePlugin):
 
     def _compare_versions(self, v1, v2):
         try:
-            def parse_version(v):
-                return [int(x) if x.isdigit() else x for x in re.split(r'(\d+)', str(v))]
+            def parse_nums(v):
+                return [int(x) for x in re.findall(r'\d+', str(v))]
             
-            p1 = parse_version(v1)
-            p2 = parse_version(v2)
+            n1 = parse_nums(v1)
+            n2 = parse_nums(v2)
             
-            for a, b in zip(p1, p2):
-                if a == b: continue
-                if isinstance(a, int) and isinstance(b, int):
+            max_len = max(len(n1), len(n2))
+            n1.extend([0] * (max_len - len(n1)))
+            n2.extend([0] * (max_len - len(n2)))
+            
+            for a, b in zip(n1, n2):
+                if a != b:
                     return 1 if a > b else -1
-                return 1 if str(a) > str(b) else -1
-            return len(p1) - len(p2)
+            return 0
         except Exception:
             return 0
 
@@ -3184,6 +3476,20 @@ class KangelPluginsManagerPlugin(BasePlugin):
                             with open(temp_path, 'wb') as f:
                                 f.write(plugin_content)
                             
+                            try:
+                                setting_val = self.get_setting("block_untrusted_plugins", True)
+                                if str(setting_val).lower() not in ("false", "0", "none", "no", ""):
+                                    is_safe = self._check_plugin_safety(plugin_id, temp_path)
+                                    if not is_safe:
+                                        log(f"[KPM] Blocked untrusted store plugin: {plugin_id}")
+                                        run_on_ui_thread(lambda pid=plugin_id: self._show_untrusted_warning(pid))
+                                        if os.path.exists(temp_path):
+                                            try: os.remove(temp_path)
+                                            except: pass
+                                        return
+                            except Exception as safety_e:
+                                log(f"[KPM] Safety check error in store install: {safety_e}")
+                            
                             PluginsController.getInstance().showInstallDialog(fragment, temp_path, True)
                             try:
                                 self._mkstats_event("install_dialog_shown", 1)
@@ -3330,6 +3636,62 @@ class KangelPluginsManagerPlugin(BasePlugin):
             except Exception as e:
                 log(f"[KPM] Error showing requirements dialog: {e}")
         
+        run_on_ui_thread(show_dialog)
+    
+    def _show_untrusted_warning(self, plugin_id):
+        def show_dialog():
+            try:
+                fragment = get_last_fragment()
+                if not fragment:
+                    return
+                context = fragment.getParentActivity()
+                if not context:
+                    return
+                
+                bottom_sheet_builder = BottomSheet.Builder(context)
+                
+                linear_layout = LinearLayout(context)
+                linear_layout.setOrientation(1)
+                
+                sticker_image_view = BackupImageView(context)
+                sticker_image_view.setRoundRadius(0)
+                sticker_image_view.getImageReceiver().setCrossfadeWithOldImage(True)
+                linear_layout.addView(sticker_image_view, LayoutHelper.createLinear(150, 150, Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, 27, 0, 0))
+                self._load_sticker_async(sticker_image_view, "LostChocolateFlamingo_by_fStikBot", 11, "untrusted_warning_sticker")
+                
+                title_text_view = SimpleTextView(context)
+                title_text_view.setTypeface(AndroidUtilities.bold())
+                title_text_view.setTextSize(20)
+                title_text_view.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
+                title_text_view.setText(_tr("untrusted_warning_title"))
+                title_text_view.setGravity(Gravity.CENTER)
+                linear_layout.addView(title_text_view, LayoutHelper.createLinear(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL, 10, 27, 10, 0))
+                
+                info_text = TextView(context)
+                info_text.setGravity(Gravity.CENTER)
+                warning_text = str(_tr("untrusted_warning_text"))
+                spannable_info, plain_info = _parse_markdown(warning_text, Theme.getColor(Theme.key_windowBackgroundWhiteBlueText))
+                if spannable_info:
+                    info_text.setText(spannable_info)
+                    try:
+                        from android.text.method import LinkMovementMethod
+                        info_text.setMovementMethod(LinkMovementMethod.getInstance())
+                    except Exception:
+                        pass
+                else:
+                    info_text.setText(plain_info)
+                info_text.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
+                info_text.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
+                linear_layout.addView(info_text, LayoutHelper.createLinear(-1, -2, Gravity.TOP, 24, 20, 24, 20))
+                
+                scroll_view = NestedScrollView(context)
+                scroll_view.addView(linear_layout)
+                bottom_sheet_builder.setCustomView(scroll_view)
+                
+                bottom_sheet = bottom_sheet_builder.show()
+                log(f"[KPM] Untrusted warning shown for {plugin_id}")
+            except Exception as e:
+                log(f"[KPM] Error showing untrusted warning: {e}")
         run_on_ui_thread(show_dialog)
     
     def _load_sticker_async(self, image_view, sticker_set_name, sticker_index, cache_key=None):
@@ -3801,6 +4163,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
         def update_query(query):
             if query == delegate.search_query:
                 return
+            delegate.ai_result_ids = None
             nonlocal id
             id += 1
             delegate.search_query = query
@@ -3817,6 +4180,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 if param.thisObject != item or param.args[0] == True:
                     return
                 param.setResult(None)
+                delegate.ai_result_ids = None
                 update_query(None)
                 
         hook = self.hook_method(ActionBarMenuItem.getClass().getDeclaredMethod("toggleSearch", Boolean.TYPE), SearchCollapseHook())
@@ -3876,6 +4240,13 @@ class KangelPluginsManagerPlugin(BasePlugin):
             fragment.getActionBar().createMenu().addItem(5, R_tg.drawable.menu_sort_value).setOnClickListener(OnClickListener(show_sort_dialog))
         except Exception as e:
             log(f"[KPM] Failed to add sort button: {e}")
+
+        try:
+            from android_utils import OnClickListener
+            ai_item = fragment.getActionBar().createMenu().addItem(6, R_tg.drawable.msg_addbot)
+            ai_item.setOnClickListener(OnClickListener(lambda *_: self._show_ai_search_dialog(delegate)))
+        except Exception as e:
+            log(f"[KPM] Failed to add AI search button: {e}")
 
         try:
             from android_utils import OnClickListener
@@ -4024,6 +4395,199 @@ class KangelPluginsManagerPlugin(BasePlugin):
             _apply_header_label(current)
         except Exception as e:
             log(f"[KPM] Failed to setup filter title: {e}")
+
+    MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
+    MISTRAL_MODEL = "mistral-small-latest"
+
+    def _build_ai_plugin_index(self):
+        try:
+            if not self.plugins_list:
+                self.load_cache()
+            index = []
+            for pid, info in self.plugins_list.items():
+                if isinstance(info, dict):
+                    name = info.get("name", pid)
+                    desc = info.get("description", "")
+                    author = info.get("author", "")
+                    status = info.get("status", "plugin")
+                    if len(desc) > 350:
+                        desc = desc[:350] + "..."
+                    index.append({
+                        "id": pid,
+                        "name": name,
+                        "description": desc,
+                        "author": author,
+                        "status": status
+                    })
+            return index
+        except Exception as e:
+            log(f"[KPM] AI index build error: {e}")
+            return []
+
+    def _call_mistral_ai_search(self, query, plugin_index):
+        try:
+            api_key = self.get_setting("mistral_api_key", "jgzwICGYO4KtFBC3xdiq5u1K8dsi5iWj")
+            model = self.get_setting("mistral_model", self.MISTRAL_MODEL)
+            import json as json_lib
+            plugin_json = json_lib.dumps(plugin_index, ensure_ascii=False)
+
+            available_statuses = sorted(set(
+                (p.get("status") or "plugin") for p in plugin_index
+            ))
+            statuses_str = ", ".join(available_statuses) if available_statuses else "plugin"
+
+            system_prompt = (
+                "You are a precise plugin search assistant for Kangel Plugins Manager "
+                "(exteraGram/AyuGram plugin store).\n"
+                "You will be given a JSON array of plugins, each with: id, name, description, author, status.\n\n"
+
+                f"Valid statuses in this dataset: {statuses_str}.\n\n"
+
+                "MATCHING RULES (priority order):\n"
+                "1. Semantic match on 'description' — understand user intent even if wording differs "
+                "(e.g. 'скрыть онлайн' should match a plugin described as 'hides last seen/typing indicators').\n"
+                "2. Match on 'name' — including partial names and common abbreviations.\n"
+                "3. Match on 'author' — only if the user explicitly names an author.\n"
+                "4. Ignore 'library' status plugins unless the user explicitly asks for libraries/dependencies "
+                "(users almost never want raw libraries, they want end-user features).\n\n"
+
+                "STRICTNESS:\n"
+                "- Do NOT match on a single overlapping word alone (e.g. don't match 'video downloader' to 'video calls').\n"
+                "- If the query is vague, prefer broader recall (include plausible candidates) over an empty result.\n"
+                "- If the query is very specific, return only strong matches, even if that means 0-1 results.\n\n"
+
+                "OUTPUT FORMAT:\n"
+                "Return ONLY {\"plugins\": [\"id1\", \"id2\", ...]}, ordered by relevance (best match first). "
+                "No explanations, no markdown, no extra keys.\n\n"
+
+                "Available plugins:\n" + plugin_json
+            )
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Find plugins matching: {query}"}
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.0,
+                "max_tokens": 200_000
+            }
+            log(f"[KPM] AI search: calling Mistral with {len(plugin_index)} plugins, query='{query}'")
+            response = requests.post(self.MISTRAL_API_URL, headers=headers, json=payload, timeout=30)
+            if response.status_code == 429:
+                return None, _tr("ai_search_error").format("Rate limit, попробуй чуть позже")
+            if response.status_code != 200:
+                log(f"[KPM] AI search: Mistral returned {response.status_code}: {response.text[:200]}")
+                return None, _tr("ai_search_error").format(f"HTTP {response.status_code}")
+            data = response.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if not content:
+                return None, _tr("ai_search_error").format("Empty response")
+            result = json_lib.loads(content)
+            ids = result.get("plugins", [])
+            if not isinstance(ids, list):
+                ids = [ids]
+            ids = [str(pid) for pid in ids]
+            valid_ids = [pid for pid in ids if pid in self.plugins_list]
+            log(f"[KPM] AI search: found {len(valid_ids)} valid plugin IDs out of {len(ids)} returned")
+            return valid_ids, None
+        except requests.exceptions.Timeout:
+            return None, _tr("ai_search_error").format("Timeout")
+        except requests.exceptions.ConnectionError:
+            return None, _tr("ai_search_error").format("Connection failed (VPN required?)")
+        except Exception as e:
+            log(f"[KPM] AI search error: {e}")
+            return None, _tr("ai_search_error").format(str(e))
+
+    def _show_ai_search_dialog(self, delegate):
+        try:
+            fragment = get_last_fragment()
+            if not fragment:
+                return
+            context = fragment.getParentActivity()
+            if not context:
+                return
+            if not self.plugins_list:
+                self.load_cache()
+            if not self.plugins_list:
+                BulletinHelper.show_error(_tr("list_empty"))
+                return
+
+            edit_text = EditText(context)
+            edit_text.setHint(_tr("ai_search_hint"))
+            edit_text.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16)
+            try:
+                edit_text.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
+                edit_text.setHintTextColor(Theme.getColor(Theme.key_dialogTextGray))
+            except Exception:
+                pass
+            try:
+                edit_text.setBackground(Theme.createRoundRectDrawable(
+                    AndroidUtilities.dp(12),
+                    Theme.getColor(Theme.key_windowBackgroundWhite)
+                ))
+            except Exception:
+                pass
+            try:
+                edit_text.setPadding(
+                    AndroidUtilities.dp(16), AndroidUtilities.dp(12),
+                    AndroidUtilities.dp(16), AndroidUtilities.dp(12)
+                )
+            except Exception:
+                pass
+
+            builder = AlertDialogBuilder(context)
+            builder.set_title(_tr("ai_search"))
+            builder.set_message(_tr("ai_search_description"))
+            builder.set_view(edit_text)
+
+            def do_search(dialog, which):
+                query = edit_text.getText().toString().strip()
+                if not query:
+                    return
+                BulletinHelper.show_info(_tr("ai_search_loading"))
+                run_on_queue(lambda: self._run_ai_search(delegate, query))
+
+            builder.set_positive_button(_tr("ai_search_button"), do_search)
+            builder.set_negative_button(_tr("cancel"), lambda d, w: d.dismiss())
+            builder.show()
+            run_on_ui_thread(lambda: edit_text.requestFocus(), 200)
+        except Exception as e:
+            log(f"[KPM] AI search dialog error: {e}")
+
+    def _run_ai_search(self, delegate, query):
+        try:
+            plugin_index = self._build_ai_plugin_index()
+            if not plugin_index:
+                run_on_ui_thread(lambda: BulletinHelper.show_error(_tr("ai_search_error").format("No plugins loaded")))
+                return
+            result_ids, error = self._call_mistral_ai_search(query, plugin_index)
+            if error:
+                run_on_ui_thread(lambda: BulletinHelper.show_error(error))
+                return
+            if not result_ids:
+                def apply_empty_results():
+                    delegate.search_query = None
+                    delegate.ai_result_ids = set()
+                    if delegate.adapter:
+                        delegate.adapter.update(True)
+                    BulletinHelper.show_info(_tr("ai_search_no_results"))
+                run_on_ui_thread(apply_empty_results)
+                return
+            def apply_results():
+                delegate.search_query = None
+                delegate.ai_result_ids = set(result_ids)
+                if delegate.adapter:
+                    delegate.adapter.update(True)
+            run_on_ui_thread(apply_results)
+        except Exception as e:
+            log(f"[KPM] AI search run error: {e}")
+            run_on_ui_thread(lambda: BulletinHelper.show_error(_tr("ai_search_error").format(str(e))))
 
     INSTALL = 0
     UPDATE = 1
@@ -4554,7 +5118,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     button = None
                     view_button = None
                     if self.outer.type == KangelPluginsManagerPlugin.INSTALL:
-                        button = create_button(R_tg.drawable.msg_download, lambda: self.outer.pl.show_plugin_info_and_install(p.getId()))
+                        if version_compatible:
+                            button = create_button(R_tg.drawable.msg_download, lambda: self.outer.pl.show_plugin_info_and_install(p.getId()))
                         def open_raw():
                             try:
                                 try:
@@ -4619,36 +5184,10 @@ class KangelPluginsManagerPlugin(BasePlugin):
                      
                     this.addView(new_buttons_layout, LayoutHelper.createFrame(-2, -2, gravity | Gravity.RIGHT, 0, 0, 0, 8))
                     try:
-                        delay = 0
-                        try:
-                            parent = this.getParent()
-                            if parent and hasattr(parent, 'indexOfChild'):
-                                idx = parent.indexOfChild(this)
-                                delay = min(idx * 50, 300)
-                        except:
-                            pass
-                        this.setAlpha(0.0)
-                        this.setScaleX(0.85)
-                        this.setScaleY(0.85)
-                        this.setTranslationY(AndroidUtilities.dp(40))
-                        
-                        def start_animation():
-                            try:
-                                this.animate() \
-                                    .alpha(1.0) \
-                                    .scaleX(1.0) \
-                                    .scaleY(1.0) \
-                                    .translationY(0.0) \
-                                    .setDuration(250) \
-                                    .setInterpolator(OvershootInterpolator(1.2)) \
-                                    .start()
-                            except:
-                                pass
-                        
-                        if delay > 0:
-                            run_on_ui_thread(start_animation, delay)
-                        else:
-                            start_animation()
+                        this.setAlpha(1.0)
+                        this.setScaleX(1.0)
+                        this.setScaleY(1.0)
+                        this.setTranslationY(0.0)
                     except Exception:
                         pass
                     
@@ -4663,6 +5202,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             self.display_names = display_names
             self.pl = pl
             self.search_query = None
+            self.ai_result_ids = None
             self.adapter = None
             self.type = type
             self.fill_id = 0
@@ -4671,6 +5211,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             self.scroll_icon = None
             self.scroll_listener = None
             self.scroll_controls_visible = True
+            self.empty_view = None
 
         def _scroll_list_to(self, edge):
             try:
@@ -4829,6 +5370,22 @@ class KangelPluginsManagerPlugin(BasePlugin):
             self.content_view.addView(self.recycler, LayoutHelper.createFrame(-1, -1))
 
             try:
+                empty_view = TextView(get_last_fragment().getContext())
+                empty_view.setGravity(Gravity.CENTER)
+                empty_view.setText(_tr("no_plugins_found"))
+                empty_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16)
+                empty_view.setTypeface(AndroidUtilities.bold())
+                empty_view.setVisibility(View.GONE)
+                try:
+                    empty_view.setTextColor(Theme.getColor(Theme.key_dialogTextGray2))
+                except Exception:
+                    pass
+                self.empty_view = empty_view
+                self.content_view.addView(empty_view, LayoutHelper.createFrame(-1, -1, Gravity.CENTER, 24, 0, 24, 0))
+            except Exception as e:
+                log(f"[KPM] empty view create failed: {e}")
+
+            try:
                 from android_utils import OnClickListener
                 controls = LinearLayout(get_last_fragment().getContext())
                 controls.setOrientation(LinearLayout.HORIZONTAL)
@@ -4950,8 +5507,11 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 except Exception:
                     pass
                 return status_filter == "plugin"
-            if self.search_query:
+            if self.ai_result_ids is not None:
+                plugin_ids = [pid for pid in self.plugin_ids if pid in self.ai_result_ids and _passes_status(pid)]
+            elif self.search_query:
                 query = str(self.search_query)
+                self.ai_result_ids = None
                 smart_search = bool(self.pl.get_setting("smart_search", True))
                 if smart_search and len(query.strip()) >= 3 and getattr(self.pl, "_trigram_index", None):
                     ranked = self.pl._trigram_search(query, allowed_ids=self.plugin_ids)
@@ -5018,6 +5578,11 @@ class KangelPluginsManagerPlugin(BasePlugin):
 
             except Exception as e:
                 log(f"[KPM] Sort error: {e}")
+            try:
+                if self.empty_view:
+                    self.empty_view.setVisibility(View.VISIBLE if len(plugin_ids) == 0 else View.GONE)
+            except Exception:
+                pass
             self.addItems(0, plugin_ids, items, self.fill_id)
             run_on_ui_thread(lambda: self._update_scroll_control_state(), 50)
         
@@ -5132,6 +5697,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
         
         def onFragmentDestroy(self, *_):
             self.fill_id += 1
+            self.ai_result_ids = None
             try:
                 if self.content_view:
                     parent = self.content_view.getParent()
