@@ -6,6 +6,7 @@ from android.net import Uri
 from android_utils import log as _android_log, run_on_ui_thread
 from client_utils import get_last_fragment, get_messages_controller
 from hook_utils import get_private_field
+from file_utils import get_plugins_dir
 from java.util import Locale
 
 
@@ -166,6 +167,21 @@ def log(*args, **kwargs):
         pass
 
 def _get_lang():
+    _plugin_instance = None
+    try:
+        import sys
+        _mod = sys.modules.get("kangelpluginsmanager.plugin")
+        if _mod:
+            _plugin_instance = getattr(_mod, "_kpm_instance", None)
+    except Exception:
+        pass
+    if _plugin_instance:
+        try:
+            forced = _plugin_instance.get_setting("language", None)
+            if forced is not None and forced != "":
+                return str(forced)
+        except Exception:
+            pass
     lang = Locale.getDefault().getLanguage().lower()
     if lang.startswith("ru"):
         return "ru"
@@ -190,15 +206,33 @@ def _load_kpm_locale():
     global _KPM_LOCALE, _KPM_LOCALE_LOADED
     if _KPM_LOCALE_LOADED:
         return
+    _base = os.path.dirname(__file__)
+    _candidates = []
     try:
-        _locale_path = os.path.join(os.path.dirname(__file__), "assests", "locale.json")
-        if os.path.isfile(_locale_path):
-            with open(_locale_path, "r", encoding="utf-8") as _f:
-                _KPM_LOCALE = json.load(_f)
-        _KPM_LOCALE_LOADED = True
+        _candidates.append(os.path.join(_base, "assests", "locale.json"))
     except Exception:
-        _KPM_LOCALE = {}
-        _KPM_LOCALE_LOADED = True
+        pass
+    try:
+        _candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assests", "locale.json"))
+    except Exception:
+        pass
+    try:
+        _plugins_dir = get_plugins_dir()
+        if _plugins_dir:
+            _candidates.append(os.path.join(_plugins_dir, "libs", "kangelpluginsmanager-1.4.3", "kangelpluginsmanager", "assests", "locale.json"))
+    except Exception:
+        pass
+    for _locale_path in _candidates:
+        try:
+            if os.path.isfile(_locale_path):
+                with open(_locale_path, "r", encoding="utf-8") as _f:
+                    _KPM_LOCALE = json.load(_f)
+                if _KPM_LOCALE:
+                    _KPM_LOCALE_LOADED = True
+                    return
+        except Exception:
+            pass
+    _KPM_LOCALE_LOADED = True
 
 
 def _tr(key):

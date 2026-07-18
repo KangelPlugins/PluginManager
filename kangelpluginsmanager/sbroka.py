@@ -20,7 +20,9 @@ def normalize_collection_plugins(raw_plugins):
         else:
             text = str(item or "").strip()
             if text.startswith("tg://kpm_install?plugin="):
-                plugin_id = text.split("=", 1)[-1].strip()
+                from urllib.parse import urlparse, parse_qs
+                parsed = parse_qs(urlparse(text).query)
+                plugin_id = (parsed.get("plugin") or [None])[0]
             else:
                 plugin_id = text
         if plugin_id == KPM_ID:

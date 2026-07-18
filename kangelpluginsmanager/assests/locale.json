@@ -68,6 +68,7 @@
     "source_code": "Plugin source code",
     "faq": "FAQ",
     "other_settings": "Other",
+    "language": "Language",
     "status_plugin": "Plugin",
     "status_library": "Library",
     "status_customization": "Customization",
@@ -135,7 +136,14 @@
     "ai_search_api_key_sub": "Used for AI plugin search",
     "ai_search_model": "Mistral model",
     "ai_search_model_sub": "Default: mistral-small-latest",
-    "no_plugins_found": "0 plugins"
+    "no_plugins_found": "0 plugins",
+    "security": "Security",
+    "submit_bot": "Plugin check bot",
+    "submit_bot_sub": "Choose bot to check plugins for safety",
+    "submit_bot_pluggy": "@pluggy_robot",
+    "submit_bot_codeanalyze": "@CodeAnalyzeBot",
+    "submit_bot_custom": "Custom bot",
+    "submit_bot_custom_sub": "Enter bot username (without @)"
   },
   "ru": {
     "header": "Kangel Plugins Manager",
@@ -196,6 +204,7 @@
     "source_code": "Исходный код плагина",
     "faq": "FAQ",
     "other_settings": "Прочее",
+    "language": "Язык",
     "status_plugin": "Плагин",
     "status_library": "Библиотека",
     "status_customization": "Кастомизация",
@@ -273,7 +282,14 @@
     "ai_search_api_key_sub": "Используется для AI-поиска плагинов",
     "ai_search_model": "Модель Mistral",
     "ai_search_model_sub": "По умолчанию: mistral-small-latest",
-    "no_plugins_found": "Увы , модель ничего не нашла :("
+    "no_plugins_found": "Увы , модель ничего не нашла :(",
+    "security": "Безопасность",
+    "submit_bot": "Бот для проверки плагинов",
+    "submit_bot_sub": "Выберите бота для проверки плагинов на безопасность",
+    "submit_bot_pluggy": "@pluggy_robot",
+    "submit_bot_codeanalyze": "@CodeAnalyzeBot",
+    "submit_bot_custom": "Свой бот",
+    "submit_bot_custom_sub": "Введите username бота (без @)"
   },
   "uk": {
     "header": "Kangel Plugins Manager",
@@ -334,6 +350,7 @@
     "source_code": "Вихідний код плагіна",
     "faq": "FAQ",
     "other_settings": "Інше",
+    "language": "Мова",
     "status_plugin": "Плагін",
     "status_library": "Бібліотека",
     "status_customization": "Кастомізація",
@@ -411,7 +428,14 @@
     "ai_search_api_key_sub": "Використовується для AI-пошуку плагінів",
     "ai_search_model": "Модель Mistral",
     "ai_search_model_sub": "За замовчуванням: mistral-small-latest",
-    "no_plugins_found": "На жаль, модель нічого не знайшла :("
+    "no_plugins_found": "На жаль, модель нічого не знайшла :(",
+    "security": "Безпека",
+    "submit_bot": "Бот для перевірки плагінів",
+    "submit_bot_sub": "Оберіть бота для перевірки плагінів на безпеку",
+    "submit_bot_pluggy": "@pluggy_robot",
+    "submit_bot_codeanalyze": "@CodeAnalyzeBot",
+    "submit_bot_custom": "Свій бот",
+    "submit_bot_custom_sub": "Введіть username бота (без @)"
   },
   "de": {
     "header": "Kangel Plugins Manager",
@@ -472,6 +496,7 @@
     "source_code": "Plugin-Quellcode",
     "faq": "FAQ",
     "other_settings": "Sonstiges",
+    "language": "Sprache",
     "status_plugin": "Plugin",
     "status_library": "Bibliothek",
     "status_customization": "Anpassung",
@@ -549,7 +574,14 @@
     "ai_search_api_key_sub": "Wird für die KI-Plugin-Suche verwendet",
     "ai_search_model": "Mistral-Modell",
     "ai_search_model_sub": "Standard: mistral-small-latest",
-    "no_plugins_found": "Leider hat das Modell nichts gefunden :("
+    "no_plugins_found": "Leider hat das Modell nichts gefunden :(",
+    "security": "Sicherheit",
+    "submit_bot": "Plugin-Prüfungs-Bot",
+    "submit_bot_sub": "Bot zur Plugin-Sicherheitsprüfung auswählen",
+    "submit_bot_pluggy": "@pluggy_robot",
+    "submit_bot_codeanalyze": "@CodeAnalyzeBot",
+    "submit_bot_custom": "Eigener Bot",
+    "submit_bot_custom_sub": "Bot-Username eingeben (ohne @)"
   },
   "es": {
     "header": "Kangel Plugins Manager",
@@ -610,6 +642,7 @@
     "source_code": "Código fuente del plugin",
     "faq": "FAQ",
     "other_settings": "Otros",
+    "language": "Idioma",
     "status_plugin": "Plugin",
     "status_library": "Biblioteca",
     "status_customization": "Personalización",
@@ -687,7 +720,14 @@
     "ai_search_api_key_sub": "Se usa para la búsqueda de plugins con IA",
     "ai_search_model": "Modelo Mistral",
     "ai_search_model_sub": "Predeterminado: mistral-small-latest",
-    "no_plugins_found": "Lamentablemente, el modelo no encontró nada :("
+    "no_plugins_found": "Lamentablemente, el modelo no encontró nada :(",
+    "security": "Seguridad",
+    "submit_bot": "Bot de verificación de plugins",
+    "submit_bot_sub": "Elige el bot para verificar plugins por seguridad",
+    "submit_bot_pluggy": "@pluggy_robot",
+    "submit_bot_codeanalyze": "@CodeAnalyzeBot",
+    "submit_bot_custom": "Bot personalizado",
+    "submit_bot_custom_sub": "Introduce el username del bot (sin @)"
   },
   "fr": {
     "header": "Kangel Plugins Manager",
@@ -748,6 +788,7 @@
     "source_code": "Code source du plugin",
     "faq": "FAQ",
     "other_settings": "Autres",
+    "language": "Langue",
     "status_plugin": "Plugin",
     "status_library": "Bibliothèque",
     "status_customization": "Personnalisation",
@@ -825,7 +866,14 @@
     "ai_search_api_key_sub": "Utilisée pour la recherche de plugins par IA",
     "ai_search_model": "Modèle Mistral",
     "ai_search_model_sub": "Par défaut : mistral-small-latest",
-    "no_plugins_found": "Malheureusement, le modèle n'a rien trouvé :("
+    "no_plugins_found": "Malheureusement, le modèle n'a rien trouvé :(",
+    "security": "Sécurité",
+    "submit_bot": "Bot de vérification de plugins",
+    "submit_bot_sub": "Choisir le bot pour vérifier les plugins",
+    "submit_bot_pluggy": "@pluggy_robot",
+    "submit_bot_codeanalyze": "@CodeAnalyzeBot",
+    "submit_bot_custom": "Bot personnalisé",
+    "submit_bot_custom_sub": "Entrez le username du bot (sans @)"
   },
   "pt": {
     "header": "Kangel Plugins Manager",
@@ -886,6 +934,7 @@
     "source_code": "Código-fonte do plugin",
     "faq": "FAQ",
     "other_settings": "Outros",
+    "language": "Idioma",
     "status_plugin": "Plugin",
     "status_library": "Biblioteca",
     "status_customization": "Personalização",
@@ -963,6 +1012,13 @@
     "ai_search_api_key_sub": "Usada para pesquisa de plugins por IA",
     "ai_search_model": "Modelo Mistral",
     "ai_search_model_sub": "Padrão: mistral-small-latest",
-    "no_plugins_found": "Infelizmente, o modelo não encontrou nada :("
+    "no_plugins_found": "Infelizmente, o modelo não encontrou nada :(",
+    "security": "Segurança",
+    "submit_bot": "Bot de verificação de plugins",
+    "submit_bot_sub": "Escolha o bot para verificar plugins por segurança",
+    "submit_bot_pluggy": "@pluggy_robot",
+    "submit_bot_codeanalyze": "@CodeAnalyzeBot",
+    "submit_bot_custom": "Bot personalizado",
+    "submit_bot_custom_sub": "Digite o username do bot (sem @)"
   }
 }

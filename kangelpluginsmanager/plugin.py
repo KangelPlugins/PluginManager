@@ -163,11 +163,23 @@ class KangelPluginsManagerPlugin(BasePlugin):
             if not file_hash:
                 return False
 
-            store_hash = self.plugins_list.get(real_plugin_id, {}).get("hash")
-            if not store_hash:
+            plugin_info = self.plugins_list.get(real_plugin_id, {})
+            if not isinstance(plugin_info, dict):
                 return False
 
-            return file_hash.lower() == store_hash.lower()
+            store_hash = plugin_info.get("hash")
+            if store_hash and file_hash.lower() == store_hash.lower():
+                return True
+
+            legacy_versions = plugin_info.get("legacy_version", {})
+            if isinstance(legacy_versions, dict):
+                for vk, vi in legacy_versions.items():
+                    if isinstance(vi, dict):
+                        legacy_hash = vi.get("hash", "")
+                        if legacy_hash and file_hash.lower() == legacy_hash.lower():
+                            return True
+
+            return False
         except Exception as e:
             log(f"[KPM] Error checking plugin safety: {e}")
             return False
@@ -454,6 +466,11 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     text=_tr("auto_updates"),
                     icon="files_storage",
                     create_sub_fragment=self._create_auto_updates_settings
+                ),
+                Text(
+                    text=_tr("security"),
+                    icon="msg_permissions",
+                    create_sub_fragment=self._create_security_settings
                 ),
                 Text(
                     text=_tr("ui_settings"),
@@ -884,6 +901,93 @@ class KangelPluginsManagerPlugin(BasePlugin):
             )
         ]
     
+    def _create_security_settings(self):
+        return [
+            Header(text=_tr("security")),
+            Switch(
+                key="block_untrusted_plugins",
+                text=_tr("block_untrusted"),
+                default=True,
+                icon="msg_close",
+                subtext=_tr("block_untrusted_sub")
+            ),
+            Divider(),
+            Header(text=_tr("submit_bot")),
+            Text(
+                text=_tr("submit_bot_sub"),
+                icon="msg_info"
+            ),
+            Selector(
+                key="submit_bot_choice",
+                text=_tr("submit_bot"),
+                default=0,
+                items=[
+                    "@pluggy_robot",
+                    "@CodeAnalyzeBot",
+                    _tr("submit_bot_custom"),
+                ],
+                icon="msg_bot",
+                on_change=self._on_submit_bot_change
+            ),
+            Input(
+                key="submit_bot_custom_username",
+                text=_tr("submit_bot_custom_sub"),
+                default="",
+                icon="msg_edit",
+                subtext=_tr("submit_bot_custom_sub")
+            ),
+        ]
+
+    def _on_submit_bot_change(self, choice_index):
+        try:
+            if choice_index == 0:
+                self.set_setting("submit_bot_username", "pluggy_robot", reload_settings=False)
+            elif choice_index == 1:
+                self.set_setting("submit_bot_username", "CodeAnalyzeBot", reload_settings=False)
+        except Exception as e:
+            log(f"[KPM] Error in _on_submit_bot_change: {e}")
+
+    def _get_submit_bot_username(self):
+        try:
+            choice = int(self.get_setting("submit_bot_choice", 0) or 0)
+            if choice == 0:
+                return "pluggy_robot"
+            elif choice == 1:
+                return "CodeAnalyzeBot"
+            elif choice == 2:
+                custom = str(self.get_setting("submit_bot_custom_username", "") or "").strip().lstrip("@")
+                if custom:
+                    return custom
+                return "KPMAppealBot"
+            return "KPMAppealBot"
+        except:
+            return "KPMAppealBot"
+
+    def _get_submit_bot_id(self):
+        try:
+            choice = int(self.get_setting("submit_bot_choice", 0) or 0)
+            if choice == 0:
+                return 8683783103
+            elif choice == 1:
+                return 8927478894
+            elif choice == 2:
+                custom = str(self.get_setting("submit_bot_custom_username", "") or "").strip().lstrip("@")
+                if custom:
+                    try:
+                        from org.telegram.messenger import ContactsController, UserConfig
+                        current_account = UserConfig.selectedAccount
+                        user = ContactsController.getInstance(current_account).getUser(custom)
+                        if not user:
+                            user = ContactsController.getInstance(current_account).getUser(custom.lower())
+                        if user:
+                            return user.id
+                    except:
+                        pass
+                    return 0
+            return 8683783103
+        except:
+            return 8683783103
+    
     def _create_ui_settings(self):
         log("[KPM] _create_ui_settings: start")
         try:
@@ -987,8 +1091,22 @@ class KangelPluginsManagerPlugin(BasePlugin):
             ]
 
     def _create_other_settings(self):
+        lang_keys = ["", "en", "ru", "uk", "de", "es", "fr", "pt"]
+        current_lang = str(self.get_setting("language", "") or "")
+        try:
+            current_idx = lang_keys.index(current_lang) if current_lang in lang_keys else 0
+        except ValueError:
+            current_idx = 0
         return [
             Header(text=_tr("other_settings")),
+            Selector(
+                key="language",
+                text=_tr("language"),
+                default=current_idx,
+                items=["Auto", "English", "Русский", "Українська", "Deutsch", "Español", "Français", "Português"],
+                icon="msg_language",
+                on_change=lambda idx: self._on_language_change(idx)
+            ),
             Switch(
                 key="logs_enabled",
                 text=_tr("logs"),
@@ -1003,13 +1121,6 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 icon="msg_warning",
                 subtext=_tr("version_guard_sub")
             ),
-            Switch(
-                key="block_untrusted_plugins",
-                text=_tr("block_untrusted"),
-                default=True,
-                icon="msg_close",
-                subtext=_tr("block_untrusted_sub")
-            ),
             Divider(),
             Text(
                 text=_tr("faq"),
@@ -1017,6 +1128,16 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 on_click=lambda _: self._open_faq()
             ),
         ]
+
+    def _on_language_change(self, idx):
+        try:
+            lang_keys = ["", "en", "ru", "uk", "de", "es", "fr", "pt"]
+            if 0 <= idx < len(lang_keys):
+                self.set_setting("language", lang_keys[idx])
+                import kangelpluginsmanager.methods as _m
+                _m._KPM_LOCALE_LOADED = False
+        except Exception as e:
+            log(f"[KPM] Error changing language: {e}")
     
     def _show_ignored_updates_picker(self):
         try:
@@ -1490,8 +1611,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                 ver = pl.getVersion() or "1.0"
                                 result = self._create_inline_result(
                                     f"local|{pid}",
-                                    f"[Local] {name}",
-                                    f"v{ver} | {author} | Tap to send"
+                                    name,
+                                    f"v{ver} | {author}"
                                 )
                                 if result:
                                     results.add(result)
@@ -2270,6 +2391,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                             check_btn.setBackground(check_bg)
 
                                             OnClickListener = find_class("android.view.View$OnClickListener")
+                                            _check_bot_id = self.plugin._get_submit_bot_id()
                                             class CheckClickListener(dynamic_proxy(OnClickListener)):
                                                 def onClick(self, v):
                                                     try:
@@ -2278,7 +2400,11 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                                         current_account = UserConfig.selectedAccount
                                                         account_instance = AccountInstanceClass.getInstance(current_account)
 
-                                                        BOT_ID = 8536483713
+                                                        BOT_ID = _check_bot_id
+                                                        if not BOT_ID:
+                                                            BulletinHelper.show_error("Введите username бота в настройках")
+                                                            return
+
                                                         SendMessagesHelper.prepareSendingDocument(
                                                             account_instance,           
                                                             file_path_str,              
@@ -2640,13 +2766,27 @@ class KangelPluginsManagerPlugin(BasePlugin):
     
     def add_badge_hook(self):
         try:
-            bages_path = os.path.join(os.path.dirname(__file__), 'assests', 'bages.json')
-            if not os.path.exists(bages_path):
-                log("[KPM] bages.json not found, badge hook skipped")
-                return
-            with open(bages_path, 'r', encoding='utf-8') as f:
-                self._custom_badges = json.load(f)
-            log(f"[KPM] Loaded {len(self._custom_badges)} custom badges")
+            self._custom_badges = {}
+            remote_url = "https://raw.githubusercontent.com/ArThirtyFour/Fonts_For_Exteragram/refs/heads/main/badges.json"
+            try:
+                log(f"[KPM] Fetching badges from remote: {remote_url}")
+                r = requests.get(remote_url, timeout=10)
+                if r.status_code == 200:
+                    self._custom_badges = r.json()
+                    log(f"[KPM] Loaded {len(self._custom_badges)} custom badges from remote")
+                else:
+                    log(f"[KPM] Remote badges fetch failed: HTTP {r.status_code}")
+            except Exception as e:
+                log(f"[KPM] Remote badges fetch error: {e}")
+            if not self._custom_badges:
+                bages_path = os.path.join(os.path.dirname(__file__), 'assests', 'bages.json')
+                if os.path.exists(bages_path):
+                    with open(bages_path, 'r', encoding='utf-8') as f:
+                        self._custom_badges = json.load(f)
+                    log(f"[KPM] Loaded {len(self._custom_badges)} custom badges from local fallback")
+                else:
+                    log("[KPM] bages.json not found locally, badge hook skipped")
+                    return
             
             if not self._custom_badges:
                 return
@@ -2864,6 +3004,91 @@ class KangelPluginsManagerPlugin(BasePlugin):
             log(f"[KPM] Error adding badge hook: {e}")
             log(traceback.format_exc())
     
+    def _show_version_picker(self, plugin_id, versions):
+        def show_dialog():
+            try:
+                log(f"[KPM] Version picker: showing dialog for {plugin_id} ({len(versions)} versions)")
+                fragment = get_last_fragment()
+                if not fragment:
+                    log("[KPM] Version picker: fragment is None")
+                    return
+                activity = fragment.getParentActivity()
+                if not activity:
+                    log("[KPM] Version picker: activity is None")
+                    return
+
+                labels = []
+                for v in versions:
+                    labels.append(str(v["label"]))
+
+                def on_pick(d, which):
+                    try:
+                        d.dismiss()
+                    except Exception:
+                        pass
+                    selected = versions[which]
+                    sel_url = selected.get("url", "")
+                    sel_hash = selected.get("hash", "")
+                    if not sel_url:
+                        BulletinHelper.show_error("URL не найден")
+                        return
+                    log(f"[KPM] Version picker: selected '{selected.get('label', '')}'")
+                    run_on_queue(lambda: self._install_version_with_hash(plugin_id, sel_url, sel_hash, selected.get("label", "")))
+
+                try:
+                    builder = AlertDialogBuilder(activity)
+                    builder.set_title(f"Выберите версию ({plugin_id})")
+                    builder.set_items(labels, on_pick)
+                    builder.set_negative_button(_tr("cancel"), lambda b, w: b.dismiss())
+                    builder.show()
+                    log(f"[KPM] Version picker: dialog shown")
+                except Exception as e:
+                    log(f"[KPM] Version picker: AlertDialogBuilder failed: {e}")
+                    log(traceback.format_exc())
+                    try:
+                        from org.telegram.ui.ActionBar import AlertDialog as ExAlertDialog
+                        bld = ExAlertDialog.Builder(activity)
+                        bld.setTitle(f"Выберите версию ({plugin_id})")
+                        bld.setItems(labels, lambda d, which: on_pick(d, which))
+                        bld.setNegativeButton(_tr("cancel"), lambda d, w: d.dismiss())
+                        bld.show()
+                        log(f"[KPM] Version picker: ExAlertDialog shown as fallback")
+                    except Exception as e2:
+                        log(f"[KPM] Version picker: ExAlertDialog also failed: {e2}")
+            except Exception as e:
+                log(f"[KPM] Version picker dialog error: {e}")
+                log(traceback.format_exc())
+
+        run_on_ui_thread(show_dialog)
+    
+    def _install_version_with_hash(self, plugin_id, url, expected_hash, label):
+        try:
+            fragment = get_last_fragment()
+            if not fragment:
+                return
+            
+            log(f"[KPM] Downloading version: {label} from {url}")
+            plugin_content = self.fetch_remote_bytes(url)
+            
+            if expected_hash:
+                content_hash = hashlib.sha256(plugin_content).hexdigest()
+                log(f"[KPM] Downloaded hash: {content_hash}, expected: {expected_hash}")
+                if content_hash.lower() != expected_hash.lower():
+                    log(f"[KPM] Hash mismatch for {plugin_id} version {label}")
+                    run_on_ui_thread(lambda: self._show_untrusted_warning(plugin_id))
+                    return
+            
+            temp_path = os.path.join(PLUGINS_DIR, f".temp_{plugin_id}.plugin")
+            with open(temp_path, 'wb') as f:
+                f.write(plugin_content)
+            
+            log(f"[KPM] Hash verified, opening install dialog for {plugin_id} ({label})")
+            run_on_ui_thread(lambda: PluginsController.getInstance().showInstallDialog(get_last_fragment(), temp_path, True))
+        except Exception as e:
+            log(f"[KPM] Error installing version with hash: {e}")
+            log(traceback.format_exc())
+            run_on_ui_thread(lambda: BulletinHelper.show_error(f"Ошибка: {e}"))
+
     def _get_dependencies_from_file(self, file_path):
         try:
             if not os.path.exists(file_path):
@@ -3131,6 +3356,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                             normalized[pid]["min_version"] = _normalize_min_version(value.get("app_version"))
                                     if value.get("hash"):
                                         normalized[pid]["hash"] = value.get("hash")
+                                    if value.get("legacy_version"):
+                                        normalized[pid]["legacy_version"] = value.get("legacy_version")
                                     normalized[pid]["status"] = value.get("status", "plugin")
                             
 
@@ -3819,6 +4046,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
     def _mkstats_event(self, event: str, count: int = 1) -> None:
         return None
 
+
     def _get_temp_file(self, filename):
         try:
             from java.io import File
@@ -3830,29 +4058,34 @@ class KangelPluginsManagerPlugin(BasePlugin):
             log(f"[KPM] Error creating temp file: {e}")
             return None
 
-    def _send_document_with_links(self, peer_id, file_path, display_name, install_url):
+    def _send_document_with_links(self, peer_id, file_path, display_name, install_url, local=False):
         try:
-            log(f"[KPM] _send_document_with_links: name={display_name}, url={install_url}, peer={peer_id}")
-            caption = f"{display_name} — Install from Kangel Plugins Manager"
+            log(f"[KPM] _send_document_with_links: name={display_name}, peer={peer_id}")
+            if local:
+                caption = f"{display_name} — sended from Kangel Plugins Manager"
+            else:
+                caption = f"{display_name} — Install from Kangel Plugins Manager"
             entities = ArrayList()
 
-            e1 = TLRPC.TL_messageEntityTextUrl()
-            e1.offset = 0
-            e1.length = len(display_name.encode('utf_16_le')) // 2
-            e1.url = install_url
-            entities.add(e1)
-
-            marker = "Install from "
+            if local:
+                marker = "sended через "
+            else:
+                marker = "Install from "
             kangel_start = caption.find(marker)
             if kangel_start >= 0:
                 kangel_text_start = kangel_start + len(marker)
-                e2 = TLRPC.TL_messageEntityTextUrl()
-                e2.offset = len(caption[:kangel_text_start].encode('utf_16_le')) // 2
-                e2.length = len("Kangel Plugins Manager".encode('utf_16_le')) // 2
-                e2.url = "https://t.me/KangelPluginsManager"
-                entities.add(e2)
+                e = TLRPC.TL_messageEntityTextUrl()
+                e.offset = len(caption[:kangel_text_start].encode('utf_16_le')) // 2
+                e.length = len("Kangel Plugins Manager".encode('utf_16_le')) // 2
+                e.url = "https://t.me/KangelPluginsManager"
+                entities.add(e)
 
-            log(f"[KPM] Entities: e1(offset={e1.offset}, len={e1.length}, url={e1.url}), e2(offset={e2.offset}, len={e2.length}, url={e2.url})")
+            if not local:
+                e1 = TLRPC.TL_messageEntityTextUrl()
+                e1.offset = 0
+                e1.length = len(display_name.encode('utf_16_le')) // 2
+                e1.url = install_url
+                entities.add(e1)
 
             paths = ArrayList()
             orig_paths = ArrayList()
@@ -3898,7 +4131,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 
                 self._send_document_with_links(
                     peer_id, temp_file.getAbsolutePath(),
-                    pl.getName(), f"tg://kpm_install?plugin={pid}"
+                    pl.getName(), f"tg://kpm_install?plugin={pid}&version={ver}", local=True
                 )
             except Exception as e:
                 log(f"[KPM] Local send error: {e}")
@@ -3938,7 +4171,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                 
                 self._send_document_with_links(
                     peer_id, temp_file.getAbsolutePath(),
-                    name, f"tg://kpm_install?plugin={key}"
+                    name, f"tg://kpm_install?plugin={key}&version={ver}"
                 )
             except Exception as e:
                 log(f"[KPM] Remote send error: {e}")
@@ -4648,7 +4881,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                     return
 
                 plugin_id = self.id
-                link = f"tg://kpm_install?plugin={plugin_id}"
+                ver = getattr(self, 'version', None) or "1.0"
+                link = f"tg://kpm_install?plugin={plugin_id}&version={ver}"
 
                 def copy_link():
                     AndroidUtilities.addToClipboard(link)
@@ -5117,9 +5351,34 @@ class KangelPluginsManagerPlugin(BasePlugin):
                         
                     button = None
                     view_button = None
+                    version_history_button = None
                     if self.outer.type == KangelPluginsManagerPlugin.INSTALL:
                         if version_compatible:
                             button = create_button(R_tg.drawable.msg_download, lambda: self.outer.pl.show_plugin_info_and_install(p.getId()))
+                            try:
+                                pid_for_versions = p.getId()
+                                pinfo_for_versions = self.outer.pl.plugins_list.get(pid_for_versions, {})
+                                if isinstance(pinfo_for_versions, dict):
+                                    legacy_v = pinfo_for_versions.get("legacy_version", {})
+                                    cur_url = pinfo_for_versions.get("url", "")
+                                    cur_hash = pinfo_for_versions.get("hash", "")
+                                    ver_list = []
+                                    cur_ver = pinfo_for_versions.get("version", "")
+                                    if cur_url:
+                                        ver_label = f"Текущая версия ({cur_ver})" if cur_ver else "Текущая версия"
+                                        ver_list.append({"label": ver_label, "url": cur_url, "hash": cur_hash})
+                                    for vk in sorted(legacy_v.keys(), reverse=True):
+                                        vi = legacy_v[vk]
+                                        if isinstance(vi, dict):
+                                            ver_list.append({"label": str(vk), "url": vi.get("url", ""), "hash": vi.get("hash", "")})
+                                    if len(ver_list) > 1:
+                                        try:
+                                            version_history_button = create_button(R_tg.drawable.msg_forward_replace, lambda pid=pid_for_versions, vl=ver_list: self.outer.pl._show_version_picker(pid, vl))
+                                            log(f"[KPM] Version history button added for {pid_for_versions} ({len(ver_list)} versions)")
+                                        except Exception as e:
+                                            log(f"[KPM] Failed to create version history button: {e}")
+                            except Exception as e:
+                                log(f"[KPM] Error setting up version history: {e}")
                         def open_raw():
                             try:
                                 try:
@@ -5176,6 +5435,8 @@ class KangelPluginsManagerPlugin(BasePlugin):
                         new_buttons_layout.addView(share_button, share_button.getLayoutParams())
                         if view_button is not None:
                             new_buttons_layout.addView(view_button, share_button.getLayoutParams())
+                        if version_history_button is not None:
+                            new_buttons_layout.addView(version_history_button, share_button.getLayoutParams())
                     
                     if button is not None:
                          new_buttons_layout.addView(button, share_button.getLayoutParams())
