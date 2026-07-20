@@ -6,7 +6,7 @@ from org.telegram.messenger import UserConfig
 from client_utils import send_document, get_last_fragment
 from ui.alert import AlertDialogBuilder
 
-from .methods import _normalize_requirements_list, _tr, log
+from .methods import _normalize_requirements_list, _tr, _fix_plurals, log
 
 
 def normalize_collection_plugins(raw_plugins):
@@ -122,9 +122,9 @@ def import_collection(plugin_instance, file_path, auto_install=False):
                     
                     from ui.bulletin import BulletinHelper
                     if failed > 0:
-                        BulletinHelper.show_info(_tr("auto_install_partial").format(installed, failed))
+                        BulletinHelper.show_info(_fix_plurals(_tr("auto_install_partial").format(installed, failed), installed))
                     else:
-                        BulletinHelper.show_success(_tr("auto_install_success").format(installed))
+                        BulletinHelper.show_success(_fix_plurals(_tr("auto_install_success").format(installed), installed))
                 
                 from client_utils import run_on_queue
                 run_on_queue(do_auto_install)

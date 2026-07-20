@@ -241,6 +241,34 @@ def _tr(key):
     lang_dict = _KPM_LOCALE.get(lang) or _KPM_LOCALE.get("en", {})
     return lang_dict.get(key, key)
 
+def _fix_plurals(text: str, count: int) -> str:
+    lang = _get_lang()
+    if lang == "ru":
+        if count % 10 == 1 and count % 100 != 11:
+            word = "плагин"
+        elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
+            word = "плагина"
+        else:
+            word = "плагинов"
+        for w in ("плагинов", "плагина", "плагин"):
+            if w in text:
+                return text.replace(w, word, 1)
+    elif lang == "uk":
+        if count % 10 == 1 and count % 100 != 11:
+            word = "плагін"
+        elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
+            word = "плагіни"
+        else:
+            word = "плагінів"
+        for w in ("плагінів", "плагіни", "плагін"):
+            if w in text:
+                return text.replace(w, word, 1)
+    elif count == 1:
+        for w in ("plugins", "Plugins"):
+            if w in text:
+                return text.replace(w, w.rstrip("s"), 1)
+    return text
+
 def _status_label(status: str):
     try:
         s = (status or "plugin").lower()

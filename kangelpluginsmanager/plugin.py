@@ -51,6 +51,7 @@ from .methods import (
     log,
     _get_lang,
     _tr,
+    _fix_plurals,
     _status_label,
     _status_sort_key,
     _parse_markdown,
@@ -81,7 +82,7 @@ Requirements:exteraGram/AyuGram 12.5.1 or higher
 __author__ = "@ArThirtyFour | @KangelPlugins"
 __min_version__ = "12.5.1"
 __icon__ = "Kangelcons_by_fStikBot/5"
-__version__ = "1.4.3"
+__version__ = "1.4.4"
 
 PLUGINS_DIR = get_plugins_dir()
 KPM_PILL_ID = 34012501
@@ -411,7 +412,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
             count = len(self.plugins_list or {})
             text_view = get_private_field(pill, "textView")
             if text_view:
-                text_view.setText(_tr("pill_store_count").format(count))
+                text_view.setText(_fix_plurals(_tr("pill_store_count").format(count), count))
             icon_view = get_private_field(pill, "iconView")
             if icon_view:
                 try:
@@ -1336,7 +1337,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
     
     def _get_plugin_info_text(self):
         plugin_count = len(self.plugins_list) if self.plugins_list else 0
-        return _tr("plugin_info_text").format(__version__, plugin_count)
+        return _fix_plurals(_tr("plugin_info_text").format(__version__, plugin_count), plugin_count)
 
     def _show_md3_loading(self, duration_ms=3000):
         try:
@@ -3398,7 +3399,7 @@ class KangelPluginsManagerPlugin(BasePlugin):
                                     pass
                             
                             if has_bulletin:
-                                run_on_ui_thread(lambda: BulletinHelper.show_error(_tr("store_loaded").format(len(self.plugins_list))))
+                                run_on_ui_thread(lambda: BulletinHelper.show_error(_fix_plurals(_tr("store_loaded").format(len(self.plugins_list)), len(self.plugins_list))))
                             return
                 except Exception as e:
                     log(f"[KPM] JSON store fetch fail {url}: {e}")
